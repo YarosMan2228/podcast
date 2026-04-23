@@ -18,4 +18,11 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  // Test files: Vitest injects describe/test/expect as globals — turn off no-undef
+  {
+    files: ['src/test/**/*.{js,jsx}'],
+    rules: {
+      'no-undef': 'off',
+    },
+  },
 ])
