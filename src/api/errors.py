@@ -74,6 +74,15 @@ class UploadTooLarge(ApiError):
         )
 
 
+class UploadEmptyFile(ApiError):
+    status_code = 400
+    default_code = "UPLOAD_EMPTY_FILE"
+    default_message = "Uploaded file is empty."
+
+    def __init__(self) -> None:
+        super().__init__(field="file")
+
+
 class StorageError(ApiError):
     status_code = 500
     default_code = "STORAGE_ERROR"
