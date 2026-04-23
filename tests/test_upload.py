@@ -74,6 +74,21 @@ def test_upload_writes_file_to_media_root(client, media_root):
     assert raw_path.parent.parent == media_root / "uploads"
 
 
+def test_upload_kicks_off_start_job(client, media_root):
+    """End-to-end: upload → start_job runs eagerly → Job.status == INGESTING.
+
+    Proves the view dispatches the task and the task is actually wired into
+    Celery's registry (not just importable).
+    """
+    resp = client.post(UPLOAD_URL, {"file": _upload_file()}, format="multipart")
+    assert resp.status_code == 201
+    # The response still reports PENDING because it's captured before dispatch.
+    assert resp.json()["status"] == JobStatus.PENDING
+
+    job = Job.objects.get(id=resp.json()["job_id"])
+    assert job.status == JobStatus.INGESTING  # flipped by eager start_job
+
+
 def test_upload_accepts_video_mime(client, media_root):
     resp = client.post(
         UPLOAD_URL,

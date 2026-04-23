@@ -118,6 +118,12 @@ ENABLE_DIARIZATION = _env_bool("ENABLE_DIARIZATION", False)
 ENABLE_FACE_TRACKING = _env_bool("ENABLE_FACE_TRACKING", False)
 ENABLE_AI_THUMBNAILS = _env_bool("ENABLE_AI_THUMBNAILS", False)
 
+# Event publishing — tests toggle this off to avoid touching Redis.
+EVENTS_ENABLED = _env_bool("EVENTS_ENABLED", default=True)
+
+# Day-1 `start_job` stub sleep (seconds). Overridden to 0 in test settings.
+START_JOB_STUB_SLEEP_SEC = _env_int("START_JOB_STUB_SLEEP_SEC", 3)
+
 # DRF
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],

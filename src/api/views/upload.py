@@ -15,6 +15,7 @@ from api.errors import (
     UploadTooLarge,
 )
 from pipeline.ingestion import is_accepted_mime, save_upload
+from workers.tasks import start_job
 
 
 @api_view(["POST"])
@@ -31,6 +32,9 @@ def upload(request: Request) -> Response:
         raise UploadInvalidFormat(mime=uploaded.content_type)
 
     job = save_upload(uploaded)
+    # .claude/rules/celery-tasks.md §7: only dispatch after the Job row is
+    # committed. save_upload's transaction.atomic() has already exited here.
+    start_job.apply_async(args=[str(job.id)])
     return Response(
         {"job_id": str(job.id), "status": job.status},
         status=status.HTTP_201_CREATED,
