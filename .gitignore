@@ -12,6 +12,9 @@ db.sqlite3
 media/
 staticfiles/
 
+# Pytest
+.pytest_cache/
+
 # Node
 node_modules/
 frontend/dist/
