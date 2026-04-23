@@ -6,7 +6,7 @@
 
 ### Шаг 1 — Добавить тип в enum
 
-`src/models/artifact.py`:
+`src/jobs/enums.py`:
 
 ```python
 class ArtifactType(models.TextChoices):

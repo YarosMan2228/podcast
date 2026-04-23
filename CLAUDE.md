@@ -45,7 +45,7 @@ Web-приложение: пользователь загружает подка
 | `src/pipeline/prompts/` | все LLM промпты как константы/функции |
 | `src/workers/` | Celery tasks (по одному файлу на тип артефакта) |
 | `src/services/` | Обёртки внешних API (`whisper_client`, `claude_client`) |
-| `src/models/` | Django models, только структура данных |
+| `src/jobs/` | Django app с моделями (Job, Transcript, Analysis, Artifact), enums, миграции. Импорт — `from jobs.models import Job, Transcript, Analysis, Artifact`. |
 | `frontend/src/components/` | Презентационные React-компоненты |
 | `frontend/src/pages/` | Страницы (роутинг-level компоненты) |
 | `frontend/src/hooks/` | Custom hooks, включая `useJob(jobId)` |

@@ -5,7 +5,7 @@ import uuid
 
 from django.db import models as djmodels
 
-from models.job import Job
+from jobs.job import Job
 
 
 class Analysis(djmodels.Model):

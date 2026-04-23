@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.db import models as djmodels
 
-from models.enums import ArtifactStatus
+from jobs.enums import ArtifactStatus
 
 
 class ArtifactManager(djmodels.Manager):

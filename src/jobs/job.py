@@ -5,7 +5,7 @@ import uuid
 
 from django.db import models as djmodels
 
-from models.enums import JobStatus, SourceType
+from jobs.enums import JobStatus, SourceType
 
 
 class Job(djmodels.Model):

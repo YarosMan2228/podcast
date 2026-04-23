@@ -10,7 +10,7 @@ import uuid
 import pytest
 from django.db import IntegrityError, transaction
 
-from models.models import (
+from jobs.models import (
     JOB_TRANSITIONS,
     Analysis,
     Artifact,

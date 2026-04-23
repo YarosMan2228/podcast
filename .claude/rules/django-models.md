@@ -1,8 +1,7 @@
 ---
 name: django-models
 globs:
-  - "src/models/**/*.py"
-  - "src/core/migrations/**/*.py"
+  - "src/jobs/**/*.py"
 ---
 
 # Django Models — правила
@@ -111,8 +110,8 @@ git push  # ломаем второго разработчика
 git pull
 python manage.py makemigrations
 python manage.py migrate  # проверяем что применилась
-git add src/core/migrations/000X_....py src/models/
-git commit -m "models: add Artifact.version field + migration"
+git add src/jobs/migrations/000X_....py src/jobs/
+git commit -m "jobs: add Artifact.version field + migration"
 ```
 
 **Обратимость**: Django обычно генерирует обратную миграцию автоматически. Для сложных data-миграций пиши `reverse_code`:

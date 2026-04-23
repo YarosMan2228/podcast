@@ -8,9 +8,9 @@ import uuid
 
 from django.db import models as djmodels
 
-from models.enums import ArtifactStatus, ArtifactType
-from models.job import Job
-from models.managers import ArtifactManager
+from jobs.enums import ArtifactStatus, ArtifactType
+from jobs.job import Job
+from jobs.managers import ArtifactManager
 
 
 class Artifact(djmodels.Model):

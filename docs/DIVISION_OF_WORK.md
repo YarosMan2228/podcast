@@ -54,11 +54,16 @@ src/
 │   ├── __init__.py
 │   ├── tasks.py               # Celery tasks orchestrator (chain: transcribe → analyze → fan-out)
 │   └── video_clip_worker.py
-├── models/
-│   ├── job.py                 # Job model
+├── jobs/                       # Django app с моделями
+│   ├── apps.py                 # JobsConfig
+│   ├── enums.py                # JobStatus, ArtifactType, ArtifactStatus, SourceType + транзишны
+│   ├── job.py                  # Job model
 │   ├── transcript.py
 │   ├── analysis.py
-│   └── artifact.py            # общая таблица, shared с Person B
+│   ├── artifact.py             # общая таблица, shared с Person B
+│   ├── managers.py
+│   ├── models.py               # Django entry point: re-export всех моделей и enum-ов
+│   └── migrations/
 └── core/
     ├── settings.py
     ├── celery.py
@@ -222,7 +227,7 @@ frontend/
 
 Эти файлы трогают оба. Конфликты неизбежны, поэтому — правила.
 
-### 1. `src/models/` и миграции БД
+### 1. `src/jobs/` (Django-модели) и миграции БД
 - Менять схему — **только по согласованию в Slack/Telegram** (2-минутный ping)
 - Перед миграцией: `pull → makemigrations → check что нет conflict-миграций → apply → push`
 - Если Person B меняет `Artifact.metadata_json`, Person A должен быть в курсе (поля могут читаться из разных воркеров)
