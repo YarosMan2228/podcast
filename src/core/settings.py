@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "api.apps.ApiConfig",
-    # "models.apps.ModelsConfig",  # enabled in step 2 with the first migration
+    "models.apps.ModelsConfig",
 ]
 
 MIDDLEWARE = [
