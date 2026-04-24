@@ -12,6 +12,7 @@ from django.db import transaction
 from core.celery import celery_app
 from jobs.models import Job, JobStatus, can_transition
 from pipeline.ingestion import IngestionError, ingest_job
+from pipeline.transcription import TranscriptionError, transcribe_job
 from services.events import publish
 
 logger = logging.getLogger(__name__)
@@ -99,4 +100,35 @@ def start_job(self, job_id: str) -> None:
         _fail_job(job_id, JobStatus.INGESTING, exc.code, exc.message)
         return
 
+    # .claude/rules/celery-tasks.md §7: dispatch the next stage only after
+    # the ingestion updates are committed (ingest_job's UPDATE is outside a
+    # wrapping transaction here, so Django has already committed on return).
+    transcribe_job_task.apply_async(args=[job_id])
     logger.info("task_completed", extra={"task": "start_job", "job_id": job_id})
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=330,
+    acks_late=True,
+)
+def transcribe_job_task(self, job_id: str) -> None:
+    """Run Whisper transcription: INGESTING → TRANSCRIBING, call API, save row.
+
+    Analysis dispatch is wired in the next Day-2 subtask; for now a successful
+    transcription leaves the Job in ``TRANSCRIBING`` with a ``Transcript`` row
+    persisted. ``TranscriptionError`` (empty / wrong language / noise / whisper
+    down) moves the job to FAILED.
+    """
+    logger.info("task_started", extra={"task": "transcribe_job", "job_id": job_id})
+    transition_job_status(job_id, JobStatus.INGESTING, JobStatus.TRANSCRIBING)
+
+    try:
+        transcribe_job(job_id)
+    except TranscriptionError as exc:
+        _fail_job(job_id, JobStatus.TRANSCRIBING, exc.code, exc.message)
+        return
+
+    logger.info("task_completed", extra={"task": "transcribe_job", "job_id": job_id})

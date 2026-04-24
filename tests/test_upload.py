@@ -34,16 +34,18 @@ def client() -> APIClient:
 
 
 @pytest.fixture(autouse=True)
-def _stub_ingest_job():
-    """These tests exercise the upload view, not the ffmpeg pipeline.
+def _stub_pipeline():
+    """These tests exercise the upload view, not the media pipeline.
 
-    Eager Celery + real ingestion would shoot ffmpeg at synthetic ``_mp3_bytes``
-    and fail the job on every test. Patch it at the task-layer import site
-    (``workers.tasks.ingest_job``) so start_job stays a no-op here; pipeline
-    behaviour is covered in ``test_ingestion.py``.
+    Patch ingestion at its task-layer import site and intercept the chain
+    dispatch so start_job stops at INGESTING instead of running the full
+    chain under eager Celery. Pipeline behaviour is covered in
+    ``test_ingestion.py`` / ``test_transcription.py``.
     """
-    with patch("workers.tasks.ingest_job") as m:
-        yield m
+    with patch("workers.tasks.ingest_job"), patch(
+        "workers.tasks.transcribe_job_task.apply_async"
+    ):
+        yield
 
 
 def _mp3_bytes(size: int = 64) -> bytes:

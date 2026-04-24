@@ -1,4 +1,4 @@
-"""workers.tasks — transition helper and start_job wiring."""
+"""workers.tasks — transition helper, start_job, transcribe_job_task."""
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -7,7 +7,13 @@ import pytest
 
 from jobs.models import Job, JobStatus, SourceType
 from pipeline.ingestion import IngestionError
-from workers.tasks import InvalidTransition, start_job, transition_job_status
+from pipeline.transcription import TranscriptionError
+from workers.tasks import (
+    InvalidTransition,
+    start_job,
+    transcribe_job_task,
+    transition_job_status,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -69,15 +75,32 @@ def test_transition_terminal_states_cannot_move() -> None:
 
 
 def test_start_job_transitions_to_ingesting_and_runs_ingestion() -> None:
-    """Happy path: pending → ingesting, then ingest_job is invoked."""
+    """Happy path: pending → ingesting, ingest_job invoked, next stage dispatched."""
     job = Job.objects.create(source_type=SourceType.FILE)
-    with patch("workers.tasks.ingest_job") as ingest, patch("workers.tasks.publish") as pub:
+    with patch("workers.tasks.ingest_job") as ingest, patch(
+        "workers.tasks.transcribe_job_task.apply_async"
+    ) as next_task, patch("workers.tasks.publish") as pub:
         start_job.apply_async(args=[str(job.id)])
 
     ingest.assert_called_once_with(str(job.id))
+    next_task.assert_called_once_with(args=[str(job.id)])
     job.refresh_from_db()
     assert job.status == JobStatus.INGESTING
     pub.assert_called_once_with(str(job.id), "status_changed", {"status": "INGESTING"})
+
+
+def test_start_job_does_not_dispatch_next_stage_on_failure() -> None:
+    """If ingestion fails, we must NOT hand control to the transcribe task."""
+    job = Job.objects.create(source_type=SourceType.FILE)
+    with patch(
+        "workers.tasks.ingest_job",
+        side_effect=IngestionError("INGESTION_NORMALIZE_FAILED", "ffmpeg exited 1"),
+    ), patch("workers.tasks.transcribe_job_task.apply_async") as next_task:
+        start_job.apply_async(args=[str(job.id)])
+
+    next_task.assert_not_called()
+    job.refresh_from_db()
+    assert job.status == JobStatus.FAILED
 
 
 def test_start_job_uses_standard_decorator() -> None:
@@ -101,9 +124,7 @@ def test_start_job_fails_job_on_ingestion_error() -> None:
     with patch(
         "workers.tasks.ingest_job",
         side_effect=IngestionError("INGESTION_DURATION_UNKNOWN", "bad metadata"),
-    ):
-        # Must NOT raise — a permanent pipeline error should leave the task
-        # acked and the job in FAILED, per .claude/rules/celery-tasks.md §6.
+    ), patch("workers.tasks.transcribe_job_task.apply_async"):
         start_job.apply_async(args=[str(job.id)])
 
     job.refresh_from_db()
@@ -117,10 +138,53 @@ def test_start_job_ingestion_error_emits_failed_status_event() -> None:
     with patch(
         "workers.tasks.ingest_job",
         side_effect=IngestionError("INGESTION_NORMALIZE_FAILED", "ffmpeg exited 1"),
-    ), patch("workers.tasks.publish") as pub:
+    ), patch("workers.tasks.transcribe_job_task.apply_async"), patch(
+        "workers.tasks.publish"
+    ) as pub:
         start_job.apply_async(args=[str(job.id)])
 
-    # Two events: PENDING→INGESTING on entry, then INGESTING→FAILED after the error.
     assert pub.call_count == 2
     assert pub.call_args_list[0].args == (str(job.id), "status_changed", {"status": "INGESTING"})
     assert pub.call_args_list[1].args == (str(job.id), "status_changed", {"status": "FAILED"})
+
+
+# -------------------- transcribe_job_task --------------------
+
+
+def test_transcribe_task_uses_standard_decorator() -> None:
+    assert transcribe_job_task.max_retries == 3
+    assert transcribe_job_task.soft_time_limit == 300
+    assert transcribe_job_task.time_limit == 330
+    assert transcribe_job_task.acks_late is True
+
+
+def test_transcribe_task_transitions_ingesting_to_transcribing() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.INGESTING)
+    with patch("workers.tasks.transcribe_job") as tr, patch("workers.tasks.publish") as pub:
+        transcribe_job_task.apply_async(args=[str(job.id)])
+
+    tr.assert_called_once_with(str(job.id))
+    job.refresh_from_db()
+    assert job.status == JobStatus.TRANSCRIBING
+    pub.assert_called_once_with(str(job.id), "status_changed", {"status": "TRANSCRIBING"})
+
+
+def test_transcribe_task_fails_job_on_transcription_error() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.INGESTING)
+    with patch(
+        "workers.tasks.transcribe_job",
+        side_effect=TranscriptionError("TRANSCRIPTION_EMPTY", "no speech"),
+    ):
+        transcribe_job_task.apply_async(args=[str(job.id)])
+
+    job.refresh_from_db()
+    assert job.status == JobStatus.FAILED
+    assert "TRANSCRIPTION_EMPTY" in job.error
+    assert "no speech" in job.error
+
+
+def test_transcribe_task_rejects_wrong_start_state() -> None:
+    """Must not move a job that isn't currently INGESTING."""
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.PENDING)
+    with pytest.raises(InvalidTransition):
+        transcribe_job_task.apply_async(args=[str(job.id)])
