@@ -6,10 +6,12 @@ from unittest.mock import patch
 import pytest
 
 from jobs.models import Job, JobStatus, SourceType
+from pipeline.analysis import AnalysisError
 from pipeline.ingestion import IngestionError
 from pipeline.transcription import TranscriptionError
 from workers.tasks import (
     InvalidTransition,
+    analyze_job_task,
     start_job,
     transcribe_job_task,
     transition_job_status,
@@ -160,10 +162,13 @@ def test_transcribe_task_uses_standard_decorator() -> None:
 
 def test_transcribe_task_transitions_ingesting_to_transcribing() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.INGESTING)
-    with patch("workers.tasks.transcribe_job") as tr, patch("workers.tasks.publish") as pub:
+    with patch("workers.tasks.transcribe_job") as tr, patch(
+        "workers.tasks.analyze_job_task.apply_async"
+    ) as next_task, patch("workers.tasks.publish") as pub:
         transcribe_job_task.apply_async(args=[str(job.id)])
 
     tr.assert_called_once_with(str(job.id))
+    next_task.assert_called_once_with(args=[str(job.id)])
     job.refresh_from_db()
     assert job.status == JobStatus.TRANSCRIBING
     pub.assert_called_once_with(str(job.id), "status_changed", {"status": "TRANSCRIBING"})
@@ -174,9 +179,10 @@ def test_transcribe_task_fails_job_on_transcription_error() -> None:
     with patch(
         "workers.tasks.transcribe_job",
         side_effect=TranscriptionError("TRANSCRIPTION_EMPTY", "no speech"),
-    ):
+    ), patch("workers.tasks.analyze_job_task.apply_async") as next_task:
         transcribe_job_task.apply_async(args=[str(job.id)])
 
+    next_task.assert_not_called()
     job.refresh_from_db()
     assert job.status == JobStatus.FAILED
     assert "TRANSCRIPTION_EMPTY" in job.error
@@ -188,3 +194,44 @@ def test_transcribe_task_rejects_wrong_start_state() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.PENDING)
     with pytest.raises(InvalidTransition):
         transcribe_job_task.apply_async(args=[str(job.id)])
+
+
+# -------------------- analyze_job_task --------------------
+
+
+def test_analyze_task_uses_standard_decorator() -> None:
+    assert analyze_job_task.max_retries == 3
+    assert analyze_job_task.soft_time_limit == 300
+    assert analyze_job_task.time_limit == 330
+    assert analyze_job_task.acks_late is True
+
+
+def test_analyze_task_transitions_transcribing_to_analyzing() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.TRANSCRIBING)
+    with patch("workers.tasks.analyze_job") as an, patch("workers.tasks.publish") as pub:
+        analyze_job_task.apply_async(args=[str(job.id)])
+
+    an.assert_called_once_with(str(job.id))
+    job.refresh_from_db()
+    assert job.status == JobStatus.ANALYZING
+    pub.assert_called_once_with(str(job.id), "status_changed", {"status": "ANALYZING"})
+
+
+def test_analyze_task_fails_job_on_analysis_error() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.TRANSCRIBING)
+    with patch(
+        "workers.tasks.analyze_job",
+        side_effect=AnalysisError("ANALYSIS_INVALID_JSON", "no valid json"),
+    ):
+        analyze_job_task.apply_async(args=[str(job.id)])
+
+    job.refresh_from_db()
+    assert job.status == JobStatus.FAILED
+    assert "ANALYSIS_INVALID_JSON" in job.error
+    assert "no valid json" in job.error
+
+
+def test_analyze_task_rejects_wrong_start_state() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.INGESTING)
+    with pytest.raises(InvalidTransition):
+        analyze_job_task.apply_async(args=[str(job.id)])

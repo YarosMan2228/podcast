@@ -11,6 +11,7 @@ from django.db import transaction
 
 from core.celery import celery_app
 from jobs.models import Job, JobStatus, can_transition
+from pipeline.analysis import AnalysisError, analyze_job
 from pipeline.ingestion import IngestionError, ingest_job
 from pipeline.transcription import TranscriptionError, transcribe_job
 from services.events import publish
@@ -131,4 +132,31 @@ def transcribe_job_task(self, job_id: str) -> None:
         _fail_job(job_id, JobStatus.TRANSCRIBING, exc.code, exc.message)
         return
 
+    analyze_job_task.apply_async(args=[job_id])
     logger.info("task_completed", extra={"task": "transcribe_job", "job_id": job_id})
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=330,
+    acks_late=True,
+)
+def analyze_job_task(self, job_id: str) -> None:
+    """Run Claude analysis: TRANSCRIBING → ANALYZING, one structured Claude call.
+
+    Artifact fan-out is wired in Day 3; for now a successful analysis leaves
+    the Job in ``ANALYZING`` with an ``Analysis`` row persisted.
+    ``AnalysisError`` moves the job to FAILED.
+    """
+    logger.info("task_started", extra={"task": "analyze_job", "job_id": job_id})
+    transition_job_status(job_id, JobStatus.TRANSCRIBING, JobStatus.ANALYZING)
+
+    try:
+        analyze_job(job_id)
+    except AnalysisError as exc:
+        _fail_job(job_id, JobStatus.ANALYZING, exc.code, exc.message)
+        return
+
+    logger.info("task_completed", extra={"task": "analyze_job", "job_id": job_id})
