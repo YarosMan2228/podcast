@@ -93,3 +93,15 @@ class NotFound(ApiError):
     status_code = 404
     default_code = "NOT_FOUND"
     default_message = "Resource not found."
+
+
+class JobNotFound(ApiError):
+    """SPEC §9.3 — ``GET /api/jobs/:id`` returns this when the uuid is unknown."""
+
+    status_code = 404
+    default_code = "JOB_NOT_FOUND"
+    default_message = "Job not found."
+
+    def __init__(self, job_id: str | None = None) -> None:
+        msg = f"Job {job_id!r} not found." if job_id else self.default_message
+        super().__init__(message=msg, field="job_id")

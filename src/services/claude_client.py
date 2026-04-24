@@ -1,89 +1,278 @@
-"""Anthropic Claude API client — SPEC §4.4, §6.6.
+"""Anthropic Claude client — shared call site for every Claude invocation.
 
-All Claude calls go through this module. Implements prompt caching:
-the transcript block is marked ``cache_control=ephemeral`` so downstream
-text-artifact workers share the cached tokens within the 5-minute TTL window,
-saving up to 90 % of input-token costs for repeated calls on the same job.
+Rules owner: see ``.claude/rules/claude-api-usage.md``. Per §1, nothing else
+in the codebase should instantiate ``anthropic.Anthropic`` — everything
+goes through ``claude_client.call(...)``.
+
+Key responsibilities:
+
+- Retries on transient errors (RateLimit / APIError / APIConnection / APITimeout)
+  with exponential backoff 1/2/4/8s, max 4 attempts (§6).
+- Usage logging with job_id, prompt_name, input/output/cache token counts,
+  duration_ms (§7).
+- ``max_tokens`` and ``temperature`` are required arguments — no sloppy
+  defaults (§2).
+- Accepts ``system`` as either a str or the block-list form; the caller
+  decides whether to mark a block with ``cache_control`` for §4 prompt
+  caching (the transcript, re-used across Analysis + text artifacts).
+
+The raw response is wrapped in a ``ClaudeResponse`` dataclass so callers
+don't have to juggle the SDK's pydantic types directly.
+
+Text artifact workers use the convenience wrapper ``call_text_artifact``
+which builds the cached system blocks and sends the prompt-caching beta
+header automatically (SPEC §6.6).
 """
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
 from typing import Any
 
-import anthropic
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-# Beta header required to activate prompt-caching on the API side.
+MAX_ATTEMPTS = 4
+BACKOFF_BASE_SEC = 1.0
+
+# Beta header required to activate prompt-caching on the Anthropic API.
 _PROMPT_CACHE_BETA = "prompt-caching-2024-07-31"
 
+_TEXT_ARTIFACT_SYSTEM_PREFIX = (
+    "You are an expert podcast content repurposing specialist. "
+    "You create compelling, publication-ready content for various "
+    "platforms from podcast transcripts. Always follow the exact "
+    "format and length constraints specified in each request."
+)
 
-def _make_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+class ClaudeError(Exception):
+    """Raised after retries are exhausted (transient=True) or on permanent errors."""
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        self.transient = transient
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class ClaudeResponse:
+    """Normalized slice of an Anthropic messages response.
+
+    We only surface the fields the pipeline cares about — the raw response
+    is intentionally not exposed so callers don't take a hard dep on SDK
+    types.
+    """
+
+    text: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    stop_reason: str
+
+
+def _get_anthropic() -> Any:
+    """Lazy import so the SDK isn't required at test-collection time."""
+    from anthropic import Anthropic  # type: ignore
+
+    return Anthropic(api_key=settings.ANTHROPIC_API_KEY or None)
+
+
+def _retryable_exceptions() -> tuple[type[BaseException], ...]:
+    try:
+        from anthropic import (  # type: ignore
+            APIConnectionError,
+            APIError,
+            APITimeoutError,
+            RateLimitError,
+        )
+    except Exception:  # pragma: no cover
+        return ()
+    return (RateLimitError, APIError, APITimeoutError, APIConnectionError)
+
+
+def _permanent_exceptions() -> tuple[type[BaseException], ...]:
+    try:
+        from anthropic import BadRequestError  # type: ignore
+    except Exception:  # pragma: no cover
+        return ()
+    return (BadRequestError,)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+class ClaudeClient:
+    """Thin wrapper — see module docstring.
+
+    Not a singleton by construction, but a module-level instance
+    ``claude_client`` is exported at the bottom for convenience. Tests
+    inject a fake via the ``client`` parameter on ``call``.
+    """
+
+    def call(
+        self,
+        *,
+        system: str | list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        max_tokens: int,
+        temperature: float,
+        prompt_name: str,
+        job_id: str | None = None,
+        model: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        client: Any | None = None,
+    ) -> ClaudeResponse:
+        model = model or settings.CLAUDE_MODEL
+        retryable = _retryable_exceptions()
+        permanent = _permanent_exceptions()
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            started = time.monotonic()
+            try:
+                sdk = client if client is not None else _get_anthropic()
+                resp = sdk.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system,
+                    messages=messages,
+                    **({"extra_headers": extra_headers} if extra_headers else {}),
+                )
+            except permanent as exc:  # type: ignore[misc]
+                logger.warning(
+                    "claude_permanent_error",
+                    extra={
+                        "job_id": job_id,
+                        "prompt_name": prompt_name,
+                        "error": str(exc),
+                        "attempt": attempt,
+                    },
+                )
+                raise ClaudeError(str(exc), transient=False) from exc
+            except retryable as exc:  # type: ignore[misc]
+                if attempt == MAX_ATTEMPTS:
+                    logger.error(
+                        "claude_retries_exhausted",
+                        extra={
+                            "job_id": job_id,
+                            "prompt_name": prompt_name,
+                            "error": str(exc),
+                            "attempts": attempt,
+                        },
+                    )
+                    raise ClaudeError(
+                        f"Claude retries exhausted after {attempt} attempts: {exc}",
+                        transient=True,
+                    ) from exc
+                backoff = BACKOFF_BASE_SEC * (2 ** (attempt - 1))
+                logger.warning(
+                    "claude_retryable_error",
+                    extra={
+                        "job_id": job_id,
+                        "prompt_name": prompt_name,
+                        "error": str(exc),
+                        "attempt": attempt,
+                        "backoff_sec": backoff,
+                    },
+                )
+                _sleep(backoff)
+                continue
+
+            duration_ms = int((time.monotonic() - started) * 1000)
+            normalized = _build_response(resp)
+            logger.info(
+                "claude_call",
+                extra={
+                    "job_id": job_id,
+                    "prompt_name": prompt_name,
+                    "model": model,
+                    "input_tokens": normalized.input_tokens,
+                    "cache_read_tokens": normalized.cache_read_tokens,
+                    "cache_creation_tokens": normalized.cache_creation_tokens,
+                    "output_tokens": normalized.output_tokens,
+                    "duration_ms": duration_ms,
+                    "attempt": attempt,
+                    "stop_reason": normalized.stop_reason,
+                },
+            )
+            return normalized
+
+        # Unreachable — loop either returns or raises.
+        raise ClaudeError("Claude call exited loop without result", transient=True)
+
+
+def _attr(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _build_response(resp: Any) -> ClaudeResponse:
+    blocks = _attr(resp, "content", []) or []
+    text_parts: list[str] = []
+    for b in blocks:
+        if _attr(b, "type", "") == "text":
+            text_parts.append(_attr(b, "text", "") or "")
+    usage = _attr(resp, "usage", None)
+    return ClaudeResponse(
+        text="".join(text_parts),
+        input_tokens=int(_attr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(_attr(usage, "output_tokens", 0) or 0),
+        cache_read_tokens=int(_attr(usage, "cache_read_input_tokens", 0) or 0),
+        cache_creation_tokens=int(_attr(usage, "cache_creation_input_tokens", 0) or 0),
+        stop_reason=_attr(resp, "stop_reason", "") or "",
+    )
+
+
+# Module-level singleton — import as ``from services.claude_client import claude_client``.
+claude_client = ClaudeClient()
+
+
+# ─────────────────── text-artifact convenience wrapper ───────────────────
 
 
 def call_text_artifact(
     transcript_text: str,
     user_message: str,
     *,
-    max_tokens: int = 2048,
-    temperature: float = 0.7,
+    max_tokens: int,
+    temperature: float,
+    job_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Call Claude with the transcript prompt-cached in the system message.
+    """Convenience wrapper for text-artifact workers — SPEC §6.6.
 
-    The transcript block is sent with ``cache_control: {"type": "ephemeral"}``
-    so it is reused across all five text-artifact tasks for the same job.
-
-    Args:
-        transcript_text: Full transcript (cached for 5 min across calls).
-        user_message: Generation instruction for this specific artifact type.
-        max_tokens: Maximum tokens for the completion.
-        temperature: Sampling temperature.
+    Builds the cached system blocks (transcript marked ``cache_control:
+    ephemeral``) and delegates to ``claude_client.call``. All five text
+    artifact tasks for the same job share the cached transcript tokens.
 
     Returns:
         ``(text_content, usage_dict)`` where *usage_dict* contains
         ``claude_model``, ``input_tokens``, ``output_tokens``.
     """
-    model: str = settings.CLAUDE_MODEL
-    client = _make_client()
-
-    response = client.messages.create(
-        model=model,
+    system: list[dict[str, Any]] = [
+        {"type": "text", "text": _TEXT_ARTIFACT_SYSTEM_PREFIX},
+        {
+            "type": "text",
+            "text": f"<transcript>\n{transcript_text}\n</transcript>",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    resp = claude_client.call(
+        system=system,
+        messages=[{"role": "user", "content": user_message}],
         max_tokens=max_tokens,
         temperature=temperature,
-        system=[
-            {
-                "type": "text",
-                "text": (
-                    "You are an expert podcast content repurposing specialist. "
-                    "You create compelling, publication-ready content for various "
-                    "platforms from podcast transcripts. Always follow the exact "
-                    "format and length constraints specified in each request."
-                ),
-            },
-            {
-                "type": "text",
-                "text": f"<transcript>\n{transcript_text}\n</transcript>",
-                "cache_control": {"type": "ephemeral"},
-            },
-        ],
-        messages=[{"role": "user", "content": user_message}],
+        prompt_name="text_artifact",
+        job_id=job_id,
         extra_headers={"anthropic-beta": _PROMPT_CACHE_BETA},
     )
-
-    text = response.content[0].text
     usage: dict[str, Any] = {
-        "claude_model": model,
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
+        "claude_model": settings.CLAUDE_MODEL,
+        "input_tokens": resp.input_tokens,
+        "output_tokens": resp.output_tokens,
     }
-    logger.info(
-        "claude_call_completed",
-        extra={
-            "model": model,
-            "input_tokens": usage["input_tokens"],
-            "output_tokens": usage["output_tokens"],
-        },
-    )
-    return text, usage
+    return resp.text, usage
