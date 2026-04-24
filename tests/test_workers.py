@@ -5,13 +5,23 @@ from unittest.mock import patch
 
 import pytest
 
-from jobs.models import Job, JobStatus, SourceType
+from jobs.models import (
+    Analysis,
+    Artifact,
+    ArtifactStatus,
+    ArtifactType,
+    Job,
+    JobStatus,
+    SourceType,
+)
 from pipeline.analysis import AnalysisError
 from pipeline.ingestion import IngestionError
 from pipeline.transcription import TranscriptionError
 from workers.tasks import (
     InvalidTransition,
+    NUM_VIDEO_CLIPS,
     analyze_job_task,
+    orchestrate_artifacts,
     start_job,
     transcribe_job_task,
     transition_job_status,
@@ -208,10 +218,15 @@ def test_analyze_task_uses_standard_decorator() -> None:
 
 def test_analyze_task_transitions_transcribing_to_analyzing() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.TRANSCRIBING)
-    with patch("workers.tasks.analyze_job") as an, patch("workers.tasks.publish") as pub:
+    # Stub orchestrate_artifacts so we isolate the analyze transition —
+    # its own fan-out behaviour is covered further down in this file.
+    with patch("workers.tasks.analyze_job") as an, patch(
+        "workers.tasks.orchestrate_artifacts.apply_async"
+    ) as orch, patch("workers.tasks.publish") as pub:
         analyze_job_task.apply_async(args=[str(job.id)])
 
     an.assert_called_once_with(str(job.id))
+    orch.assert_called_once_with(args=[str(job.id)])
     job.refresh_from_db()
     assert job.status == JobStatus.ANALYZING
     pub.assert_called_once_with(str(job.id), "status_changed", {"status": "ANALYZING"})
@@ -235,3 +250,113 @@ def test_analyze_task_rejects_wrong_start_state() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.INGESTING)
     with pytest.raises(InvalidTransition):
         analyze_job_task.apply_async(args=[str(job.id)])
+
+
+# -------------------- orchestrate_artifacts --------------------
+
+
+def _make_analysis(job: Job, *, candidate_count: int) -> Analysis:
+    """Build an Analysis row with ``candidate_count`` clip candidates."""
+    return Analysis.objects.create(
+        job=job,
+        episode_title="t",
+        hook="h",
+        themes_json=[],
+        chapters_json=[],
+        clip_candidates_json=[
+            {
+                "start_ms": i * 60_000,
+                "end_ms": i * 60_000 + 45_000,
+                "virality_score": 9 - i,
+                "reason": "x",
+                "hook_text": f"h{i}",
+            }
+            for i in range(candidate_count)
+        ],
+        quotes_json=[],
+        claude_model="claude-sonnet-4-6",
+        input_tokens=1,
+        output_tokens=1,
+    )
+
+
+def test_orchestrate_task_uses_standard_decorator() -> None:
+    assert orchestrate_artifacts.max_retries == 3
+    assert orchestrate_artifacts.soft_time_limit == 300
+    assert orchestrate_artifacts.time_limit == 330
+    assert orchestrate_artifacts.acks_late is True
+
+
+def test_orchestrate_creates_five_video_clips_and_enqueues_each() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
+    _make_analysis(job, candidate_count=10)  # more than we'll schedule
+
+    with patch(
+        "workers.video_clip_worker.generate_video_clip.apply_async"
+    ) as kick:
+        orchestrate_artifacts.apply_async(args=[str(job.id)])
+
+    job.refresh_from_db()
+    assert job.status == JobStatus.GENERATING
+    artifacts = list(Artifact.objects.filter(job=job).order_by("index"))
+    assert len(artifacts) == NUM_VIDEO_CLIPS
+    assert {a.type for a in artifacts} == {ArtifactType.VIDEO_CLIP}
+    assert {a.status for a in artifacts} == {ArtifactStatus.QUEUED}
+    assert [a.index for a in artifacts] == list(range(NUM_VIDEO_CLIPS))
+    # One apply_async per artifact, all on the "video" queue.
+    assert kick.call_count == NUM_VIDEO_CLIPS
+    for call in kick.call_args_list:
+        assert call.kwargs.get("queue") == "video"
+
+
+def test_orchestrate_clamps_to_number_of_available_candidates() -> None:
+    """Short episode: Claude returned 2 candidates, so we ship 2 clip slots."""
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
+    _make_analysis(job, candidate_count=2)
+
+    with patch("workers.video_clip_worker.generate_video_clip.apply_async") as kick:
+        orchestrate_artifacts.apply_async(args=[str(job.id)])
+
+    assert Artifact.objects.filter(job=job).count() == 2
+    assert kick.call_count == 2
+
+
+def test_orchestrate_fails_job_with_zero_candidates() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
+    _make_analysis(job, candidate_count=0)
+
+    with patch("workers.video_clip_worker.generate_video_clip.apply_async") as kick:
+        orchestrate_artifacts.apply_async(args=[str(job.id)])
+
+    kick.assert_not_called()
+    job.refresh_from_db()
+    # Transitions through GENERATING on its way to FAILED — that's fine,
+    # the terminal state is what matters.
+    assert job.status == JobStatus.FAILED
+    assert "ORCHESTRATE_NO_CLIPS" in job.error
+
+
+def test_orchestrate_rejects_wrong_start_state() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.TRANSCRIBING)
+    _make_analysis(job, candidate_count=5)
+    with pytest.raises(InvalidTransition):
+        orchestrate_artifacts.apply_async(args=[str(job.id)])
+
+
+def test_orchestrate_is_idempotent_on_rerun() -> None:
+    """A retry after partial progress must not create a 2nd set of rows."""
+    job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
+    _make_analysis(job, candidate_count=5)
+
+    with patch("workers.video_clip_worker.generate_video_clip.apply_async"):
+        orchestrate_artifacts.apply_async(args=[str(job.id)])
+
+    # Simulate the orchestrator being kicked a second time with the job
+    # already at GENERATING — mimics a worker crash + requeue.
+    Job.objects.filter(id=job.id).update(status=JobStatus.ANALYZING)
+    with patch("workers.video_clip_worker.generate_video_clip.apply_async"):
+        orchestrate_artifacts.apply_async(args=[str(job.id)])
+
+    # Same 5 rows — update_or_create keyed on (job, type, index) prevents
+    # duplicates (rules/celery-tasks.md §3).
+    assert Artifact.objects.filter(job=job).count() == NUM_VIDEO_CLIPS
