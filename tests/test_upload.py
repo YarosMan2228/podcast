@@ -33,6 +33,19 @@ def client() -> APIClient:
     return APIClient()
 
 
+@pytest.fixture(autouse=True)
+def _stub_ingest_job():
+    """These tests exercise the upload view, not the ffmpeg pipeline.
+
+    Eager Celery + real ingestion would shoot ffmpeg at synthetic ``_mp3_bytes``
+    and fail the job on every test. Patch it at the task-layer import site
+    (``workers.tasks.ingest_job``) so start_job stays a no-op here; pipeline
+    behaviour is covered in ``test_ingestion.py``.
+    """
+    with patch("workers.tasks.ingest_job") as m:
+        yield m
+
+
 def _mp3_bytes(size: int = 64) -> bytes:
     # ID3v2 header + null padding is enough for the handler; we don't decode.
     return b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\x00" * (size - 10)
@@ -78,9 +91,11 @@ def test_upload_kicks_off_start_job(client, media_root):
     """End-to-end: upload → start_job runs eagerly → Job.status == INGESTING.
 
     Proves the view dispatches the task and the task is actually wired into
-    Celery's registry (not just importable).
+    Celery's registry (not just importable). ``ingest_job`` is patched so the
+    test doesn't shell out to ffmpeg on the synthetic mp3 bytes.
     """
-    resp = client.post(UPLOAD_URL, {"file": _upload_file()}, format="multipart")
+    with patch("workers.tasks.ingest_job"):
+        resp = client.post(UPLOAD_URL, {"file": _upload_file()}, format="multipart")
     assert resp.status_code == 201
     # The response still reports PENDING because it's captured before dispatch.
     assert resp.json()["status"] == JobStatus.PENDING

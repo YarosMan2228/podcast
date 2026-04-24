@@ -1,12 +1,12 @@
-"""workers.tasks — transition helper and start_job stub."""
+"""workers.tasks — transition helper and start_job wiring."""
 from __future__ import annotations
 
 from unittest.mock import patch
 
 import pytest
-from django.test import override_settings
 
 from jobs.models import Job, JobStatus, SourceType
+from pipeline.ingestion import IngestionError
 from workers.tasks import InvalidTransition, start_job, transition_job_status
 
 pytestmark = pytest.mark.django_db
@@ -68,12 +68,13 @@ def test_transition_terminal_states_cannot_move() -> None:
 # -------------------- start_job task --------------------
 
 
-def test_start_job_stub_transitions_pending_to_ingesting() -> None:
+def test_start_job_transitions_to_ingesting_and_runs_ingestion() -> None:
+    """Happy path: pending → ingesting, then ingest_job is invoked."""
     job = Job.objects.create(source_type=SourceType.FILE)
-    with patch("workers.tasks.publish") as pub:
-        # Eager mode (CELERY_TASK_ALWAYS_EAGER=True) runs the task inline.
+    with patch("workers.tasks.ingest_job") as ingest, patch("workers.tasks.publish") as pub:
         start_job.apply_async(args=[str(job.id)])
 
+    ingest.assert_called_once_with(str(job.id))
     job.refresh_from_db()
     assert job.status == JobStatus.INGESTING
     pub.assert_called_once_with(str(job.id), "status_changed", {"status": "INGESTING"})
@@ -87,20 +88,39 @@ def test_start_job_uses_standard_decorator() -> None:
     assert start_job.acks_late is True
 
 
-@override_settings(START_JOB_STUB_SLEEP_SEC=0)
-def test_start_job_respects_sleep_setting() -> None:
-    """If the stub sleep is 0, the task finishes effectively instantly."""
-    import time as _time
-
-    job = Job.objects.create(source_type=SourceType.FILE)
-    started = _time.monotonic()
-    with patch("workers.tasks.publish"):
-        start_job.apply_async(args=[str(job.id)])
-    assert _time.monotonic() - started < 1.0
-
-
 def test_start_job_propagates_invalid_transition_in_eager_mode() -> None:
     """A job already past PENDING must not be re-transitioned by a second kick."""
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.INGESTING)
     with pytest.raises(InvalidTransition):
         start_job.apply_async(args=[str(job.id)])
+
+
+def test_start_job_fails_job_on_ingestion_error() -> None:
+    """IngestionError from the pipeline → job FAILED, error persisted, no raise."""
+    job = Job.objects.create(source_type=SourceType.FILE)
+    with patch(
+        "workers.tasks.ingest_job",
+        side_effect=IngestionError("INGESTION_DURATION_UNKNOWN", "bad metadata"),
+    ):
+        # Must NOT raise — a permanent pipeline error should leave the task
+        # acked and the job in FAILED, per .claude/rules/celery-tasks.md §6.
+        start_job.apply_async(args=[str(job.id)])
+
+    job.refresh_from_db()
+    assert job.status == JobStatus.FAILED
+    assert "INGESTION_DURATION_UNKNOWN" in job.error
+    assert "bad metadata" in job.error
+
+
+def test_start_job_ingestion_error_emits_failed_status_event() -> None:
+    job = Job.objects.create(source_type=SourceType.FILE)
+    with patch(
+        "workers.tasks.ingest_job",
+        side_effect=IngestionError("INGESTION_NORMALIZE_FAILED", "ffmpeg exited 1"),
+    ), patch("workers.tasks.publish") as pub:
+        start_job.apply_async(args=[str(job.id)])
+
+    # Two events: PENDING→INGESTING on entry, then INGESTING→FAILED after the error.
+    assert pub.call_count == 2
+    assert pub.call_args_list[0].args == (str(job.id), "status_changed", {"status": "INGESTING"})
+    assert pub.call_args_list[1].args == (str(job.id), "status_changed", {"status": "FAILED"})
