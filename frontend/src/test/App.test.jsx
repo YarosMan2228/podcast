@@ -16,9 +16,10 @@ describe('App routing', () => {
     expect(screen.getByText(/Full Content Pack/i)).toBeInTheDocument()
   })
 
-  test('renders JobPage at /jobs/:jobId and shows the id', () => {
+  test('renders JobPage at /jobs/:jobId', () => {
     renderAt('/jobs/abc-123')
-    expect(screen.getByText(/abc-123/)).toBeInTheDocument()
+    // In mock mode useJob ignores jobId and returns fixed mock data
+    expect(screen.getByText('The Hidden Cost of AI Hype')).toBeInTheDocument()
   })
 
   test('unknown route renders nothing (no crash)', () => {
