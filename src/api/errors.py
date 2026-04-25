@@ -89,6 +89,26 @@ class StorageError(ApiError):
     default_message = "Failed to persist upload."
 
 
+class ServiceNotConfigured(ApiError):
+    """503 — server can't accept jobs because external API keys are bad.
+
+    Raised by upload views *before* a Job row is persisted, so the user
+    gets a fast, actionable error instead of an upload that quietly fails
+    30 seconds later inside the worker (SPEC §1.6 + STATUS §11 demo
+    incident: placeholder OpenAI key surfaced only after Whisper 401).
+    """
+
+    status_code = 503
+    default_code = "SERVICE_NOT_CONFIGURED"
+    default_message = (
+        "Server is not configured to process jobs. Check API keys in .env."
+    )
+
+    def __init__(self, detail: str | None = None) -> None:
+        msg = detail or self.default_message
+        super().__init__(message=msg)
+
+
 class NotFound(ApiError):
     status_code = 404
     default_code = "NOT_FOUND"

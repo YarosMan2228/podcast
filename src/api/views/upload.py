@@ -10,6 +10,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from api.errors import (
+    ServiceNotConfigured,
     UploadEmptyFile,
     UploadInvalidFormat,
     UploadNoFile,
@@ -24,12 +25,28 @@ from pipeline.url_ingestion import (
     UrlValidationError,
     validate_url,
 )
+from services.preflight import check_api_keys, issues_to_message
 from workers.tasks import start_job
+
+
+def _gate_on_preflight() -> None:
+    """Reject the request with 503 if API keys are unset/placeholder.
+
+    Called from both upload entry points BEFORE any disk write or DB
+    insert so a misconfigured server doesn't accept work it can't finish.
+    Structural-only check (no network) — fast enough to run on every call,
+    and a real key swap takes effect immediately.
+    """
+    issues = check_api_keys(probe_network=False)
+    if issues:
+        raise ServiceNotConfigured(detail=issues_to_message(issues))
 
 
 @api_view(["POST"])
 @parser_classes([MultiPartParser])
 def upload(request: Request) -> Response:
+    _gate_on_preflight()
+
     uploaded = request.FILES.get("file")
     if uploaded is None:
         raise UploadNoFile()
@@ -60,6 +77,8 @@ def from_url(request: Request) -> Response:
     ingestion task (``pipeline.ingestion.ingest_job``) so the HTTP
     response stays fast and a slow download can't time out the request.
     """
+    _gate_on_preflight()
+
     raw_url = (request.data or {}).get("url") if request.data else None
     try:
         url = validate_url(raw_url)
