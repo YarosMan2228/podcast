@@ -155,9 +155,18 @@ def test_start_job_ingestion_error_emits_failed_status_event() -> None:
     ) as pub:
         start_job.apply_async(args=[str(job.id)])
 
-    assert pub.call_count == 2
+    # Three publishes: PENDING→INGESTING, then INGESTING→FAILED via
+    # transition_job_status, plus the dedicated job_failed event added in
+    # the SSE-cleanup pass so subscribers can close immediately and see
+    # the error code in the payload itself.
+    events = [c.args[1] for c in pub.call_args_list]
+    assert events == ["status_changed", "status_changed", "job_failed"]
     assert pub.call_args_list[0].args == (str(job.id), "status_changed", {"status": "INGESTING"})
     assert pub.call_args_list[1].args == (str(job.id), "status_changed", {"status": "FAILED"})
+    job_failed_payload = pub.call_args_list[2].args[2]
+    assert job_failed_payload["status"] == "FAILED"
+    assert job_failed_payload["code"] == "INGESTION_NORMALIZE_FAILED"
+    assert "ffmpeg exited 1" in job_failed_payload["error"]
 
 
 # -------------------- transcribe_job_task --------------------

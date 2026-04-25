@@ -11,10 +11,11 @@ no test coverage:
 from __future__ import annotations
 
 import errno
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
@@ -532,6 +533,111 @@ class TestVideoClipRegenerateCleanup:
 # ===========================================================================
 # §7 (technical debt) — completed_at is stamped on FAILED jobs too
 # ===========================================================================
+
+
+class TestFailJobEmitsTerminalEvents:
+    """SPEC §9.5: when a job fails, SSE clients must (a) get the error
+    in the payload itself and (b) see the stream close — not be left
+    holding a keepalive forever."""
+
+    def test_fail_job_publishes_status_changed_and_job_failed(self) -> None:
+        from workers.tasks import _fail_job
+
+        job = Job.objects.create(
+            source_type=SourceType.FILE, status=JobStatus.TRANSCRIBING
+        )
+        with patch("workers.tasks.publish") as pub:
+            _fail_job(
+                str(job.id),
+                JobStatus.TRANSCRIBING,
+                "TRANSCRIPTION_INVALID_INPUT",
+                "401 from OpenAI",
+            )
+
+        # status_changed (from transition_job_status) + job_failed (from _fail_job).
+        events = [c.args[1] for c in pub.call_args_list]
+        assert "status_changed" in events
+        assert "job_failed" in events
+
+        job_failed_call = next(
+            c for c in pub.call_args_list if c.args[1] == "job_failed"
+        )
+        payload = job_failed_call.args[2]
+        assert payload["status"] == JobStatus.FAILED
+        assert payload["code"] == "TRANSCRIPTION_INVALID_INPUT"
+        assert "401 from OpenAI" in payload["error"]
+
+    def test_fail_job_persists_error_and_completed_at(self) -> None:
+        from workers.tasks import _fail_job
+
+        job = Job.objects.create(
+            source_type=SourceType.FILE, status=JobStatus.INGESTING
+        )
+        with patch("workers.tasks.publish"):
+            _fail_job(str(job.id), JobStatus.INGESTING, "INGESTION_NORMALIZE_FAILED", "boom")
+
+        job.refresh_from_db()
+        assert job.status == JobStatus.FAILED
+        assert "INGESTION_NORMALIZE_FAILED" in (job.error or "")
+        assert job.completed_at is not None
+
+
+class TestSSEStreamClosesOnTerminalEvents:
+    """``_sse_stream`` must drop the pub/sub subscription as soon as a
+    terminal event arrives — otherwise the client holds a keepalive
+    forever and the worker leaks Redis subscriptions."""
+
+    def _drain_until_close(self, stream):
+        """Pull frames until the generator returns; capture event names."""
+        frames: list[str] = []
+        for chunk in stream:
+            text = chunk.decode("utf-8", errors="replace")
+            frames.append(text)
+        return frames
+
+    def _fake_pubsub(self, *messages):
+        ps = MagicMock()
+        scripted = [
+            {"type": "message", "data": json.dumps(m)} for m in messages
+        ]
+        scripted.append(None)  # would emit one keepalive after close, never reached
+        ps.get_message.side_effect = scripted
+        return ps
+
+    def test_stream_closes_on_job_failed(self) -> None:
+        from api.views.jobs import _sse_stream
+
+        # Build payload to simulate Redis publish + redeliver to subscriber.
+        ps = self._fake_pubsub(
+            {"event": "status_changed", "data": {"status": "FAILED"}},
+            {
+                "event": "job_failed",
+                "data": {
+                    "status": "FAILED",
+                    "code": "TRANSCRIPTION_INVALID_INPUT",
+                    "error": "401",
+                },
+            },
+        )
+        stream = _sse_stream("job-x", ps, keepalive_sec=0.01)
+        frames = self._drain_until_close(stream)
+        joined = "".join(frames)
+        assert "event: status_changed" in joined
+        assert "event: job_failed" in joined
+        # Generator returned → unsubscribe was called.
+        ps.unsubscribe.assert_called()
+        ps.close.assert_called()
+
+    def test_stream_closes_on_completed(self) -> None:
+        from api.views.jobs import _sse_stream
+
+        ps = self._fake_pubsub(
+            {"event": "completed", "data": {"package_url": "/media/x.zip"}},
+        )
+        stream = _sse_stream("job-y", ps, keepalive_sec=0.01)
+        frames = self._drain_until_close(stream)
+        assert "event: completed" in "".join(frames)
+        ps.unsubscribe.assert_called()
 
 
 class TestCompletedAtOnFailedJobs:

@@ -109,20 +109,31 @@ def check_and_trigger_packaging(job_id: str) -> bool:
 
 
 def _fail_job(job_id: str, from_status: str, code: str, message: str) -> None:
-    """Record a pipeline failure: persist the error, flip to FAILED, emit event.
+    """Record a pipeline failure: persist the error, flip to FAILED, emit events.
 
-    ``transition_job_status`` already publishes a ``status_changed`` event;
-    we piggy-back an ``artifact_failed``-shaped payload onto it by writing
-    ``error`` to the Job row first so any `GET /api/jobs/:id` reader sees it.
+    ``transition_job_status`` already publishes a generic ``status_changed``
+    event with ``{"status": "FAILED"}``. We additionally publish a dedicated
+    ``job_failed`` event carrying the error code + message so:
+
+    * the SSE stream treats it as terminal and closes the pub/sub
+      subscription immediately (see ``_sse_stream`` terminal-event check),
+    * the frontend gets the error in the SSE payload itself and doesn't
+      have to refetch GET /api/jobs/:id just to display "what broke".
 
     Also stamps ``completed_at`` — FAILED is a terminal state, so the field
     should not stay null (otherwise UI / analytics can't sort or compute
     "time spent" for failed jobs).
     """
+    error_str = f"{code}: {message}"
     Job.objects.filter(id=job_id).update(
-        error=f"{code}: {message}", completed_at=djtz.now()
+        error=error_str, completed_at=djtz.now()
     )
     transition_job_status(job_id, from_status, JobStatus.FAILED)
+    publish(
+        str(job_id),
+        "job_failed",
+        {"status": JobStatus.FAILED, "code": code, "error": error_str},
+    )
     # 'message' is reserved on LogRecord — use 'error_message' in extras.
     logger.warning(
         "pipeline_failed",
