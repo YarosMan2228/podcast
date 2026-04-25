@@ -149,7 +149,7 @@ def test_full_pipeline_upload_to_video_clips(tmp_path: Path) -> None:
         ARTIFACTS_ROOT=str(tmp_path / "media" / "artifacts"),
     ), patch(
         "pipeline.ingestion.normalize_to_wav",
-        side_effect=lambda _src, dst: Path(dst).write_bytes(b"\x00" * 4096),
+        side_effect=lambda _src, dst, **_: Path(dst).write_bytes(b"\x00" * 4096),
     ), patch(
         "pipeline.ingestion.probe_duration_sec", return_value=duration_sec
     ), patch(
@@ -246,7 +246,7 @@ def test_full_pipeline_halts_job_if_analysis_fails(tmp_path: Path) -> None:
         ARTIFACTS_ROOT=str(tmp_path / "media" / "artifacts"),
     ), patch(
         "pipeline.ingestion.normalize_to_wav",
-        side_effect=lambda _src, dst: Path(dst).write_bytes(b"\x00" * 4096),
+        side_effect=lambda _src, dst, **_: Path(dst).write_bytes(b"\x00" * 4096),
     ), patch(
         "pipeline.ingestion.probe_duration_sec", return_value=60.0
     ), patch(

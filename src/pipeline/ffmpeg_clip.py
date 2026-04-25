@@ -50,12 +50,38 @@ class FFmpegClipError(Exception):
 
     ``code`` matches the naming scheme used by ingestion / analysis so
     the worker layer can persist + event-publish it without introspection.
+
+    ``transient`` distinguishes input-data corruption / momentary IO glitches
+    (worth one Celery retry per SPEC §5.5 "FFmpeg падает с Invalid data →
+    Retry 1 раз") from permanent failures (missing binary, invalid range,
+    output too small) that won't recover on a re-run.
     """
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, transient: bool = False) -> None:
         self.code = code
         self.message = message
+        self.transient = transient
         super().__init__(f"{code}: {message}")
+
+
+# stderr substrings that indicate a transient ffmpeg failure (worth one retry).
+# Kept narrow on purpose — false positives waste a retry slot; false negatives
+# just mean the artifact gets marked FAILED on the first attempt as before.
+_TRANSIENT_STDERR_MARKERS: tuple[str, ...] = (
+    "Invalid data found when processing input",
+    "Connection reset by peer",
+    "Connection timed out",
+    "Server returned 5",  # 5xx from a remote input URL
+    "could not seek",
+    "Resource temporarily unavailable",
+)
+
+
+def _is_transient_ffmpeg_failure(stderr: str) -> bool:
+    """SPEC §5.5: certain ffmpeg failures recover on a second attempt."""
+    if not stderr:
+        return False
+    return any(marker in stderr for marker in _TRANSIENT_STDERR_MARKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +201,7 @@ def build_vertical_clip(
     output_path: str,
     *,
     audio_only: bool = False,
+    job_id: str | None = None,
 ) -> None:
     """Render a single 9:16 clip from ``input_media_path`` to ``output_path``.
 
@@ -182,6 +209,10 @@ def build_vertical_clip(
     exits, timeouts, or a missing/undersized output file. Success is
     signalled by simply returning — the caller then updates the Artifact
     row and emits the SSE event.
+
+    ``job_id`` is logging-correlation only; pass it through from the worker
+    so a failed-clip log entry can be greppped by job alongside the
+    ingestion/transcription/analysis lines.
     """
     cmd = build_clip_command(
         input_media_path,
@@ -208,6 +239,7 @@ def build_vertical_clip(
         raise FFmpegClipError(
             "CLIP_FFMPEG_TIMEOUT",
             f"ffmpeg timed out after {FFMPEG_TIMEOUT_SEC}s",
+            transient=True,
         ) from exc
     except FileNotFoundError as exc:
         raise FFmpegClipError(
@@ -216,18 +248,22 @@ def build_vertical_clip(
         ) from exc
 
     if result.returncode != 0:
+        transient = _is_transient_ffmpeg_failure(result.stderr)
         logger.error(
             "ffmpeg_clip_failed",
             extra={
+                "job_id": job_id,
                 "cmd": " ".join(cmd),
                 "stderr": result.stderr[-_STDERR_LOG_TAIL:],
                 "returncode": result.returncode,
+                "transient": transient,
             },
         )
         raise FFmpegClipError(
             "CLIP_FFMPEG_FAILED",
             f"ffmpeg exited {result.returncode}: "
             f"{result.stderr[-_STDERR_EXC_TAIL:]}",
+            transient=transient,
         )
 
     out = Path(output_path)

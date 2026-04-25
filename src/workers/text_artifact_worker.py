@@ -21,6 +21,8 @@ import logging
 import re
 from typing import Any, Callable
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from core.celery import celery_app
 from jobs.models import Artifact, ArtifactStatus
 from pipeline.prompts.text_artifacts import (
@@ -181,6 +183,26 @@ def _run_artifact_task(
             extra={"task": artifact_type_key, "artifact_id": artifact_id},
         )
 
+    except SoftTimeLimitExceeded:
+        # SPEC §9.5: don't burn retries on a 5-min hang. Mark FAILED now so
+        # check_and_trigger_packaging sees a terminal artifact and the job
+        # can finalize instead of waiting another ~15 min for retries to
+        # exhaust on subsequent timeouts.
+        logger.error(
+            "task_soft_timeout",
+            extra={"task": artifact_type_key, "artifact_id": artifact_id},
+        )
+        if artifact is not None:
+            try:
+                _mark_failed(
+                    artifact,
+                    f"{artifact_type_key}_TIMEOUT: soft_time_limit exceeded",
+                )
+            except Exception:
+                logger.exception(
+                    "mark_failed_error", extra={"artifact_id": artifact_id}
+                )
+        return
     except Exception as exc:
         logger.exception(
             "task_failed",

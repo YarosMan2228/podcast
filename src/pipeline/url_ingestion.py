@@ -14,6 +14,7 @@ MVP scope is **YouTube only**. Spotify / SoundCloud return
 """
 from __future__ import annotations
 
+import errno
 import logging
 import os
 from pathlib import Path
@@ -85,6 +86,7 @@ def download_from_url(
     dest_dir: str | os.PathLike[str],
     *,
     ytdl_options: dict[str, Any] | None = None,
+    job_id: str | None = None,
 ) -> Path:
     """Download *url* to *dest_dir* as an mp3, return path to the file.
 
@@ -93,8 +95,14 @@ def download_from_url(
     The downloaded file replaces ``raw_media_path`` for the Job and is
     fed straight into ``normalize_to_wav``.
 
-    Raises :class:`IngestionError` (code ``URL_YTDLP_FAILED``) on any
-    yt-dlp failure — live streams, geo-blocks, deleted videos, etc.
+    Raises :class:`IngestionError` on yt-dlp failures:
+
+    * code ``URL_YTDLP_FAILED`` for content-side errors (live streams,
+      geo-blocks, deleted videos, network)
+    * code ``STORAGE_FULL`` for ``ENOSPC`` IO errors (SPEC §2.5) so the
+      job error surfaces as "no disk" rather than "yt-dlp failed".
+
+    ``job_id`` is logging-correlation only.
     """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -136,11 +144,25 @@ def download_from_url(
         # live stream", "Video unavailable", etc.); pass it through as-is.
         logger.warning(
             "ytdlp_download_failed",
-            extra={"url": url, "error": str(exc)},
+            extra={"job_id": job_id, "url": url, "error": str(exc)},
         )
         raise IngestionError("URL_YTDLP_FAILED", str(exc)) from exc
     except OSError as exc:
-        # Disk full, perms, etc.
+        # Disk full vs. perms vs. arbitrary IO — split out ENOSPC so the
+        # user sees "ran out of disk" instead of a generic yt-dlp message
+        # (SPEC §2.5).
+        if getattr(exc, "errno", None) == errno.ENOSPC:
+            logger.error(
+                "ytdlp_storage_full",
+                extra={"job_id": job_id, "url": url, "error": str(exc)},
+            )
+            raise IngestionError(
+                "STORAGE_FULL", f"Out of disk during yt-dlp download: {exc}"
+            ) from exc
+        logger.warning(
+            "ytdlp_io_error",
+            extra={"job_id": job_id, "url": url, "error": str(exc)},
+        )
         raise IngestionError(
             "URL_YTDLP_FAILED", f"yt-dlp IO error: {exc}"
         ) from exc

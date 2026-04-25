@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
 from core.celery import celery_app
@@ -158,6 +159,18 @@ def generate_quote_graphic(self, artifact_id: str) -> None:
             extra={"task": "generate_quote_graphic", "artifact_id": artifact_id},
         )
 
+    except SoftTimeLimitExceeded:
+        # SPEC §9.5: Playwright can hang on font-fallback or display-init.
+        # Mark FAILED immediately so the job can finalize.
+        logger.error(
+            "task_soft_timeout",
+            extra={"task": "generate_quote_graphic", "artifact_id": artifact_id},
+        )
+        if artifact is not None:
+            _mark_failed(
+                artifact, "QUOTE_GRAPHIC_TIMEOUT: soft_time_limit exceeded"
+            )
+        return
     except Exception as exc:
         logger.exception(
             "task_failed",

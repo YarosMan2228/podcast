@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.utils import timezone as djtz
 
@@ -317,6 +318,24 @@ def package_job(self, job_id: str) -> None:
 
     try:
         included, skipped = _build_zip(job, analysis, artifacts, abs_zip)
+    except SoftTimeLimitExceeded:
+        # SPEC §9.5: zip stream stalled (slow disk, huge clips). Mark the
+        # job FAILED with a clear code so the frontend stops waiting.
+        logger.error(
+            "package_job_soft_timeout", extra={"job_id": str(job_id)}
+        )
+        # Best-effort: drop a partial zip so it doesn't haunt the media dir.
+        try:
+            if abs_zip.exists():
+                abs_zip.unlink()
+        except OSError:
+            pass
+        Job.objects.filter(id=job_id).update(
+            error=f"PACKAGE_TIMEOUT: soft_time_limit "
+            f"({package_job.soft_time_limit}s) exceeded"
+        )
+        _safe_transition(job_id, JobStatus.FAILED)
+        return
     except (OSError, zipfile.BadZipFile) as exc:
         logger.exception(
             "package_job_zip_failed", extra={"job_id": str(job_id)}

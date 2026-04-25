@@ -216,10 +216,10 @@ def test_ingest_job_downloads_url_then_normalizes(tmp_path, settings):
         download_target.write_bytes(b"\x00" * 4096)
         return download_target
 
-    def fake_normalize(input_path, output_path):
+    def fake_normalize(input_path, output_path, **_):
         Path(output_path).write_bytes(b"\x00" * 4096)
 
-    def fake_probe(path):
+    def fake_probe(path, **_):
         return 60.0
 
     with patch("pipeline.url_ingestion.download_from_url", side_effect=fake_download), \

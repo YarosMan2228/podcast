@@ -131,12 +131,17 @@ def save_upload(upload: UploadedFile) -> Job:
 # ---------------------------------------------------------------------------
 
 
-def normalize_to_wav(input_path: str, output_path: str) -> None:
+def normalize_to_wav(
+    input_path: str, output_path: str, *, job_id: str | None = None
+) -> None:
     """Normalize *input_path* to mono 16kHz PCM WAV at *output_path*.
 
     Matches the command in SPEC §2.4 and the Whisper pre-processing convention
     in ``.claude/rules/ffmpeg-usage.md`` §3. On failure: logs the tail of
     stderr and raises ``IngestionError`` with code ``INGESTION_NORMALIZE_FAILED``.
+
+    ``job_id`` is logging-correlation only — kept keyword-only so existing
+    callers/tests don't need to change.
     """
     cmd = [
         "ffmpeg", "-y",
@@ -171,6 +176,7 @@ def normalize_to_wav(input_path: str, output_path: str) -> None:
         logger.error(
             "ffmpeg_normalize_failed",
             extra={
+                "job_id": job_id,
                 "cmd": " ".join(cmd),
                 "stderr": result.stderr[-_STDERR_LOG_TAIL:],
                 "returncode": result.returncode,
@@ -189,7 +195,7 @@ def normalize_to_wav(input_path: str, output_path: str) -> None:
         )
 
 
-def probe_duration_sec(path: str) -> float:
+def probe_duration_sec(path: str, *, job_id: str | None = None) -> float:
     """Return media duration in seconds via ``ffprobe``.
 
     Raises ``IngestionError`` (code ``INGESTION_DURATION_UNKNOWN``, per SPEC
@@ -225,6 +231,7 @@ def probe_duration_sec(path: str) -> float:
         logger.error(
             "ffprobe_failed",
             extra={
+                "job_id": job_id,
                 "path": path,
                 "stderr": result.stderr[-_STDERR_LOG_TAIL:],
                 "returncode": result.returncode,
@@ -278,7 +285,7 @@ def ingest_job(job_id: str) -> None:
         from pipeline.url_ingestion import download_from_url
 
         dest_dir = Path(settings.MEDIA_ROOT) / "uploads" / str(job.id)
-        downloaded = download_from_url(job.source_url, dest_dir)
+        downloaded = download_from_url(job.source_url, dest_dir, job_id=job_id)
         Job.objects.filter(id=job.id).update(
             raw_media_path=str(downloaded),
             original_filename=downloaded.name,
@@ -299,9 +306,9 @@ def ingest_job(job_id: str) -> None:
         )
 
     normalized = raw.parent / "normalized.wav"
-    normalize_to_wav(str(raw), str(normalized))
+    normalize_to_wav(str(raw), str(normalized), job_id=job_id)
 
-    duration = probe_duration_sec(str(normalized))
+    duration = probe_duration_sec(str(normalized), job_id=job_id)
     max_min = getattr(settings, "MAX_EPISODE_DURATION_MIN", 180)
     if duration > max_min * 60:
         raise IngestionError(

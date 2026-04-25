@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
 
 from core.celery import celery_app
@@ -152,6 +153,16 @@ def start_job(self, job_id: str) -> None:
         # .claude/rules/celery-tasks.md §6: permanent error → no raise.
         _fail_job(job_id, JobStatus.INGESTING, exc.code, exc.message)
         return
+    except SoftTimeLimitExceeded:
+        # SPEC §9.5: ffmpeg / yt-dlp hung. Mark FAILED so the user sees a
+        # terminal state instead of staring at "ingesting" forever.
+        _fail_job(
+            job_id,
+            JobStatus.INGESTING,
+            "INGESTION_TIMEOUT",
+            f"soft_time_limit ({start_job.soft_time_limit}s) exceeded",
+        )
+        return
 
     # .claude/rules/celery-tasks.md §7: dispatch the next stage only after
     # the ingestion updates are committed (ingest_job's UPDATE is outside a
@@ -183,6 +194,14 @@ def transcribe_job_task(self, job_id: str) -> None:
     except TranscriptionError as exc:
         _fail_job(job_id, JobStatus.TRANSCRIBING, exc.code, exc.message)
         return
+    except SoftTimeLimitExceeded:
+        _fail_job(
+            job_id,
+            JobStatus.TRANSCRIBING,
+            "TRANSCRIPTION_TIMEOUT",
+            f"soft_time_limit ({transcribe_job_task.soft_time_limit}s) exceeded",
+        )
+        return
 
     analyze_job_task.apply_async(args=[job_id])
     logger.info("task_completed", extra={"task": "transcribe_job", "job_id": job_id})
@@ -209,6 +228,14 @@ def analyze_job_task(self, job_id: str) -> None:
         analyze_job(job_id)
     except AnalysisError as exc:
         _fail_job(job_id, JobStatus.ANALYZING, exc.code, exc.message)
+        return
+    except SoftTimeLimitExceeded:
+        _fail_job(
+            job_id,
+            JobStatus.ANALYZING,
+            "ANALYSIS_TIMEOUT",
+            f"soft_time_limit ({analyze_job_task.soft_time_limit}s) exceeded",
+        )
         return
 
     # SPEC §9.4: analyze → orchestrate_artifacts fan-out.
@@ -241,6 +268,28 @@ def orchestrate_artifacts(self, job_id: str) -> None:
     )
     transition_job_status(job_id, JobStatus.ANALYZING, JobStatus.GENERATING)
 
+    try:
+        _orchestrate_artifacts_inner(job_id)
+    except SoftTimeLimitExceeded:
+        # Mid fan-out timeout. Some artifact rows may already exist as
+        # QUEUED — those would block forever (no worker dispatched). Mark
+        # them FAILED so packaging fires on the partial set.
+        Artifact.objects.filter(
+            job_id=job_id, status=ArtifactStatus.QUEUED
+        ).update(
+            status=ArtifactStatus.FAILED,
+            error="ORCHESTRATE_TIMEOUT: soft_time_limit exceeded before dispatch",
+        )
+        _fail_job(
+            job_id,
+            JobStatus.GENERATING,
+            "ORCHESTRATE_TIMEOUT",
+            f"soft_time_limit ({orchestrate_artifacts.soft_time_limit}s) "
+            "exceeded during fan-out",
+        )
+
+
+def _orchestrate_artifacts_inner(job_id: str) -> None:
     try:
         analysis = Analysis.objects.get(job_id=job_id)
     except Analysis.DoesNotExist:

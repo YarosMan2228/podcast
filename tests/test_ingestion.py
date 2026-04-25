@@ -201,7 +201,7 @@ def test_ingest_job_populates_duration_and_normalized_path(tmp_path: Path) -> No
     with patch("pipeline.ingestion.normalize_to_wav") as nrm, patch(
         "pipeline.ingestion.probe_duration_sec", return_value=61.2
     ):
-        nrm.side_effect = lambda inp, out: _make_wav_file(Path(out))
+        nrm.side_effect = lambda inp, out, **_: _make_wav_file(Path(out))
         ingest_job(str(job.id))
 
     job.refresh_from_db()
@@ -241,7 +241,7 @@ def test_ingest_job_enforces_episode_duration_cap(tmp_path: Path) -> None:
     with patch("pipeline.ingestion.normalize_to_wav") as nrm, patch(
         "pipeline.ingestion.probe_duration_sec", return_value=120.0
     ):
-        nrm.side_effect = lambda inp, out: _make_wav_file(Path(out))
+        nrm.side_effect = lambda inp, out, **_: _make_wav_file(Path(out))
         with pytest.raises(IngestionError) as exc:
             ingest_job(str(job.id))
     assert exc.value.code == "INGESTION_EPISODE_TOO_LONG"

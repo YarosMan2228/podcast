@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
 from core.celery import celery_app
@@ -45,6 +46,10 @@ logger = logging.getLogger(__name__)
 MIN_CLIP_DURATION_SEC = 20
 # Regenerate offset when all candidates are exhausted (SPEC §5.4).
 REGEN_OFFSET_MS_MAX = 3000
+# SPEC §5.5: "FFmpeg падает с Invalid data → Retry 1 раз; если снова → FAILED".
+# Cap independent of Celery's task-level max_retries (which covers all error
+# classes) so a flaky stderr can't loop forever.
+MAX_FFMPEG_TRANSIENT_RETRIES = 1
 
 # Audio-only MIME sniffing — kept small on purpose. A mis-classified video
 # as audio would just look weird (waveform instead of picture), not break.
@@ -209,6 +214,7 @@ def _render_clip(artifact: Artifact, regenerate: bool) -> None:
             ass_path=ass_path,
             output_path=str(output_path),
             audio_only=_is_audio_only(job),
+            job_id=str(job.id),
         )
     finally:
         # Always clean up the temp .ass, even on ffmpeg failure.
@@ -337,7 +343,39 @@ def generate_video_clip(self, artifact_id: str, regenerate: bool = False) -> Non
 
     try:
         _render_clip(artifact, regenerate=regenerate)
+    except SoftTimeLimitExceeded as exc:
+        # SPEC §9.5: soft_time_limit hit — kill the artifact rather than
+        # leaving it stuck in PROCESSING (which would block packaging).
+        # No retry: a 5-min ffmpeg run is unlikely to finish in another 5.
+        _mark_failed(
+            str(artifact.id),
+            str(artifact.job_id),
+            "CLIP_TIMEOUT",
+            f"soft_time_limit ({generate_video_clip.soft_time_limit}s) exceeded",
+        )
+        return
     except FFmpegClipError as exc:
+        # SPEC §5.5: certain ffmpeg failures (Invalid data, transient IO)
+        # recover on a single retry; permanent failures (binary missing,
+        # invalid range, output too small) do not.
+        if exc.transient and self.request.retries < MAX_FFMPEG_TRANSIENT_RETRIES:
+            logger.warning(
+                "video_clip_transient_retry",
+                extra={
+                    "artifact_id": str(artifact.id),
+                    "job_id": str(artifact.job_id),
+                    "code": exc.code,
+                    "attempt": self.request.retries + 1,
+                },
+            )
+            # Reset to QUEUED so the UI shows "queued" rather than "processing"
+            # while we wait for the retry — and so a stale PROCESSING row
+            # doesn't trip up check_and_trigger_packaging if the retry is
+            # delayed past peer artifacts finishing.
+            Artifact.objects.filter(id=artifact.id).update(
+                status=ArtifactStatus.QUEUED, error=None
+            )
+            raise self.retry(exc=exc, countdown=2)
         _mark_failed(str(artifact.id), str(artifact.job_id), exc.code, exc.message)
         return
     except ValueError as exc:

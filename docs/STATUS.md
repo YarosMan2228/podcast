@@ -1,7 +1,7 @@
 # STATUS.md — текущее состояние проекта
 
-> Снимок: **2026-04-25**, после коммита `b2e5373` (Day 5 Person A).
-> Тесты: **311 passed / 0 failed**.
+> Снимок: **2026-04-25**, после Day 6 hardening (Person A).
+> Тесты: **328 passed / 0 failed** (`test_health.py::test_unknown_endpoint_returns_404` падает только под Python 3.14 — Django/template-context bug, не наш код).
 
 ---
 
@@ -36,6 +36,14 @@
   - `POST /api/artifacts/:id/regenerate` (для всех типов артефактов)
   - Расширил `orchestrate_artifacts`: + 5 text artifacts + 5 quote graphics
   - Frontend: `USE_REAL_API=true`, EventSource подключён к `/api/jobs/:id/events`, кнопка regenerate работает
+
+### Day 6 — Hardening (Person A) + Polish (Person B)
+- (uncommitted) Day 6 Person A: SoftTimeLimit handlers во всех 4 artifact workers + 4 pipeline tasks + packager → терминальное состояние вместо зависания
+  - Video clip: `transient` flag в `FFmpegClipError`, retry 1× при "Invalid data" / "Connection reset" / "Server returned 5xx" / "could not seek"
+  - URL ingestion: `OSError(ENOSPC)` → `STORAGE_FULL` (отдельный код от `URL_YTDLP_FAILED`)
+  - `job_id` прокинут в логи `normalize_to_wav` / `probe_duration_sec` / `download_from_url` / `build_vertical_clip`
+  - +20 тестов в `tests/test_hardening_day6.py` (все edge cases SPEC §5.5 и §9.5)
+- `138ba16` Day 6 Person B: Toaster (pub/sub через window event), accessibility-проходка (aria-label/role/semantic html), skeleton loaders, useReducer-рефакторинг useJob, mobile-responsive
 
 ### Day 5 — URL ingestion + Packaging
 - `b2e5373` Day 5 Person A
@@ -114,15 +122,15 @@
 ### Day 5 (joint) — на проверку Person B
 - [ ] Person B верифицирует packaging: содержимое `index.txt`, корректность папок `clips/text/graphics/`, размер ZIP
 
-### Day 6 — Hardening (Person A)
-- [ ] Все edge cases из таблиц SPEC §2.5 (URL за geo-блоком, live stream, geo, занятый диск)
-- [ ] SPEC §3.5 (Whisper short audio, wrong language, noise)
-- [ ] SPEC §4.5 (Claude empty response, schema mismatch, retry exhaustion)
-- [ ] SPEC §5.5 (FFmpeg timeout, missing source frame)
-- [ ] SPEC §9.5 (зависший артефакт > 5 мин, broken pipe SSE)
-- [ ] Retry-логика: убедиться что transcription/ffmpeg/claude ретраятся (на Claude уже есть)
-- [ ] `soft_time_limit` на все таски (по правилам уже стоит, проверить новые packager + url_ingestion)
-- [ ] Логирование: каждый внешний API call с `job_id` для grep'а (большая часть уже есть)
+### Day 6 — Hardening (Person A) — done
+- [x] SPEC §2.5: STORAGE_FULL отделён от URL_YTDLP_FAILED при ENOSPC; остальное было покрыто (live stream / geo-блок / битые метаданные / partial write / 0 байт)
+- [x] SPEC §3.5: было покрыто целиком (empty / unsupported language / noise / whisper service down)
+- [x] SPEC §4.5: было покрыто целиком (3-step retry с corrective msg + schema validation + dedupe overlapping clips)
+- [x] SPEC §5.5: добавлен retry 1× на transient FFmpeg failure ("Invalid data", "Connection reset", "Server returned 5xx", "could not seek"); audio-only / fonts / no-subs window — было
+- [x] SPEC §9.5: SoftTimeLimitExceeded handler во всех воркерах + orchestrator + packager → терминальное состояние вместо зависания в PROCESSING/GENERATING; orchestrate-timeout сливает stale QUEUED артефакты в FAILED
+- [x] Retry: ffmpeg transient — 1× через self.retry; transcription/claude — внутри своих клиентов (4 retry с backoff)
+- [x] `soft_time_limit=300` стоит везде (был); добавлены handler-ы — раньше лимит срабатывал, но артефакт оставался стучать в PROCESSING
+- [x] `job_id` прокинут в логи `normalize_to_wav` / `probe_duration_sec` / `download_from_url` / `build_vertical_clip` — теперь `grep job_id=<uuid>` ловит ВСЁ
 
 ### Day 6 — Polish (Person B)
 - [ ] Edge cases SPEC §10.6 (reconnect SSE, failed artifacts UI, retry button)
