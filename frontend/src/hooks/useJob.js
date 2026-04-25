@@ -1,7 +1,10 @@
 import { useState, useReducer, useEffect, useRef, useCallback } from 'react'
 import { job_state_processing, MOCK_SSE_SEQUENCE } from '../api/mocks.js'
 
-const USE_REAL_API = true
+// Real API in dev/prod; mock mode under Vitest so the existing mock-driven
+// tests (JobPage, useJob mock-mode, App routing) keep working without having
+// to stub fetch + EventSource everywhere.
+const USE_REAL_API = import.meta.env.MODE !== 'test'
 
 // ---------------------------------------------------------------------------
 // Shared helpers

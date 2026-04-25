@@ -23,8 +23,8 @@ describe('LandingPage', () => {
 
   test('renders "how it works" steps', () => {
     renderPage()
-    expect(screen.getByText('Upload')).toBeInTheDocument()
-    expect(screen.getByText('Process')).toBeInTheDocument()
-    expect(screen.getByText('Download Pack')).toBeInTheDocument()
+    expect(screen.getByText('Upload your episode')).toBeInTheDocument()
+    expect(screen.getByText('AI extracts the gold')).toBeInTheDocument()
+    expect(screen.getByText('Download your content pack')).toBeInTheDocument()
   })
 })

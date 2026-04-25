@@ -50,8 +50,12 @@ export default function LandingPage() {
 
   async function handleUrl(url) {
     setUploadError('')
-    const { job_id } = await submitUrl(url)
-    navigate(`/jobs/${job_id}`)
+    try {
+      const { job_id } = await submitUrl(url)
+      navigate(`/jobs/${job_id}`)
+    } catch (err) {
+      setUploadError(err.message ?? 'Could not start job from URL.')
+    }
   }
 
   return (

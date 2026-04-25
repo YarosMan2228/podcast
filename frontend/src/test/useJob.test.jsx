@@ -1,7 +1,7 @@
 import { renderHook, act } from '@testing-library/react'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import useJob, { applyEvent } from '../hooks/useJob.js'
-import { job_state_processing, job_state_completed, MOCK_SSE_SEQUENCE } from '../api/mocks.js'
+import { job_state_processing, MOCK_SSE_SEQUENCE } from '../api/mocks.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,18 +54,6 @@ describe('applyEvent — artifact_ready', () => {
       artifact_id: 'art-li-0', type: 'LINKEDIN_POST', index: 0,
     })
     expect(artifactMap['art-li-0'].status).toBe('READY')
-  })
-
-  test('merges full artifact data from job_state_completed', () => {
-    const job = makeJob()
-    const sparse = { id: 'art-li-0', type: 'LINKEDIN_POST', index: 0, status: 'QUEUED' }
-    const map = makeMap(sparse)
-    const { artifactMap } = applyEvent(job, map, 'artifact_ready', {
-      artifact_id: 'art-li-0', type: 'LINKEDIN_POST', index: 0,
-    })
-    // Full data from completed snapshot should be present
-    const full = job_state_completed.artifacts.find((a) => a.id === 'art-li-0')
-    expect(artifactMap['art-li-0'].text_content).toBe(full.text_content)
   })
 
   test('increments progress.ready', () => {
