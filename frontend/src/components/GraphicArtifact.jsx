@@ -1,9 +1,14 @@
 import { useState } from 'react'
 
 export default function GraphicArtifact({ artifact, onRegenerate }) {
-  const { file_url, metadata = {} } = artifact
+  const { file_url, metadata = {}, index } = artifact
   const { quote_text, speaker } = metadata
   const [regenerating, setRegenerating] = useState(false)
+
+  const label = `quote graphic ${(index ?? 0) + 1}`
+  const imgAlt = quote_text
+    ? `"${quote_text}"${speaker ? ` — ${speaker}` : ''}`
+    : label
 
   async function handleRegenerate() {
     setRegenerating(true)
@@ -19,11 +24,14 @@ export default function GraphicArtifact({ artifact, onRegenerate }) {
       {file_url ? (
         <img
           src={file_url}
-          alt={quote_text ?? 'Quote graphic'}
+          alt={imgAlt}
           className="w-full rounded-lg aspect-square object-cover"
         />
       ) : (
-        <div className="w-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 text-sm aspect-square">
+        <div
+          className="w-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 text-sm aspect-square"
+          aria-label={`${label} — no preview available`}
+        >
           No preview
         </div>
       )}
@@ -38,6 +46,7 @@ export default function GraphicArtifact({ artifact, onRegenerate }) {
           <a
             href={file_url}
             download
+            aria-label={`Download ${label}`}
             className="flex-1 text-center text-sm px-3 py-1.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Download
@@ -46,6 +55,8 @@ export default function GraphicArtifact({ artifact, onRegenerate }) {
         <button
           onClick={handleRegenerate}
           disabled={regenerating}
+          aria-label={`Regenerate ${label}`}
+          aria-busy={regenerating}
           className="flex-1 text-sm px-3 py-1.5 border border-indigo-300 rounded-lg text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
         >
           {regenerating ? 'Regenerating…' : 'Regenerate'}

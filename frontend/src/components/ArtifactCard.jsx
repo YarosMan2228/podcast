@@ -23,10 +23,15 @@ const TEXT_TYPES = new Set([
 function Spinner({ className = '' }) {
   return (
     <div
+      role="status"
+      aria-label="Processing"
       className={`w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin ${className}`}
-      aria-hidden="true"
     />
   )
+}
+
+function SkeletonLine({ width = 'w-2/3' }) {
+  return <div className={`h-2.5 bg-gray-200 rounded ${width}`} />
 }
 
 export default function ArtifactCard({ artifact, onRegenerate }) {
@@ -34,48 +39,68 @@ export default function ArtifactCard({ artifact, onRegenerate }) {
 
   if (artifact.status === 'QUEUED') {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-4 animate-pulse">
-        <div className="h-3 bg-gray-200 rounded w-1/3 mb-3" />
-        <div className="h-3 bg-gray-100 rounded w-2/3 mb-2" />
-        <div className="h-3 bg-gray-100 rounded w-1/2" />
+      <article
+        className="rounded-2xl border border-gray-200 bg-white p-4 animate-pulse"
+        aria-label={`${label} — queued`}
+        aria-busy="true"
+      >
+        <SkeletonLine width="w-1/3" />
+        <div className="mt-3 space-y-2">
+          <SkeletonLine width="w-full" />
+          <SkeletonLine width="w-3/4" />
+          <SkeletonLine width="w-1/2" />
+        </div>
         <p className="mt-4 text-xs text-gray-400">{label} · Queued</p>
-      </div>
+      </article>
     )
   }
 
   if (artifact.status === 'PROCESSING') {
     return (
-      <div className="rounded-2xl border border-indigo-100 bg-white p-4">
+      <article
+        className="rounded-2xl border border-indigo-100 bg-white p-4"
+        aria-label={`${label} — processing`}
+        aria-busy="true"
+      >
         <div className="flex items-center gap-2 mb-2">
           <Spinner className="text-indigo-500" />
           <span className="text-sm font-medium text-indigo-700">{label}</span>
         </div>
-        <p className="text-xs text-gray-400">Processing…</p>
-      </div>
+        <div className="space-y-2 animate-pulse">
+          <SkeletonLine width="w-full" />
+          <SkeletonLine width="w-2/3" />
+        </div>
+      </article>
     )
   }
 
   if (artifact.status === 'FAILED') {
     return (
-      <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+      <article
+        className="rounded-2xl border border-red-200 bg-red-50 p-4"
+        aria-label={`${label} — failed`}
+      >
         <p className="text-sm font-semibold text-red-700">{label}</p>
-        <p className="mt-1 text-xs text-red-500 leading-relaxed">
+        <p className="mt-1 text-xs text-red-500 leading-relaxed" role="alert">
           {artifact.error ?? 'Generation failed'}
         </p>
         <button
           onClick={() => onRegenerate?.(artifact)}
+          aria-label={`Retry generating ${label}`}
           className="mt-3 text-sm px-3 py-1.5 border border-red-300 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
-          aria-label={`Retry ${label}`}
         >
           Retry
         </button>
-      </div>
+      </article>
     )
   }
 
   // READY
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+    <article
+      className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+      aria-label={`${label} — ready`}
+    >
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">{label}</p>
 
       {artifact.type === 'VIDEO_CLIP' && (
@@ -87,6 +112,6 @@ export default function ArtifactCard({ artifact, onRegenerate }) {
       {artifact.type === 'QUOTE_GRAPHIC' && (
         <GraphicArtifact artifact={artifact} onRegenerate={onRegenerate} />
       )}
-    </div>
+    </article>
   )
 }

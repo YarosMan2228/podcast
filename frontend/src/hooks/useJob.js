@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useReducer, useEffect, useRef, useCallback } from 'react'
 import { job_state_processing, MOCK_SSE_SEQUENCE } from '../api/mocks.js'
 
 const USE_REAL_API = true
 
 // ---------------------------------------------------------------------------
-// Mock mode helpers
+// Shared helpers
 // ---------------------------------------------------------------------------
 
 function buildArtifactMap(artifacts) {
@@ -61,45 +61,67 @@ export function applyEvent(job, artifactMap, eventType, payload) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Mock mode
+// ---------------------------------------------------------------------------
+
+function mockReducer(state, action) {
+  if (action.type === 'EVENT') {
+    return applyEvent(state.job, state.artifactMap, action.eventType, action.payload)
+  }
+  return state
+}
+
 function useMockJob() {
-  const [job, setJob] = useState(job_state_processing)
-  const [artifactMap, setArtifactMap] = useState(() =>
-    buildArtifactMap(job_state_processing.artifacts),
-  )
+  const [state, dispatch] = useReducer(mockReducer, {
+    job: job_state_processing,
+    artifactMap: buildArtifactMap(job_state_processing.artifacts),
+  })
   const timersRef = useRef([])
 
   useEffect(() => {
-    let currentJob = job_state_processing
-    let currentMap = buildArtifactMap(job_state_processing.artifacts)
-
     for (const [delayMs, eventType, payload] of MOCK_SSE_SEQUENCE) {
       const id = setTimeout(() => {
-        const next = applyEvent(currentJob, currentMap, eventType, payload)
-        currentJob = next.job
-        currentMap = next.artifactMap
-        setJob({ ...currentJob })
-        setArtifactMap({ ...currentMap })
+        dispatch({ type: 'EVENT', eventType, payload })
       }, delayMs)
       timersRef.current.push(id)
     }
-
     return () => {
       timersRef.current.forEach(clearTimeout)
       timersRef.current = []
     }
   }, [])
 
-  const artifacts = Object.values(artifactMap)
-  return { job, artifacts, isConnected: true }
+  return {
+    job: state.job,
+    artifacts: Object.values(state.artifactMap),
+    isConnected: true,
+    refetch: () => {},
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Real API mode (Day 4+)
+// Real API mode
 // ---------------------------------------------------------------------------
 
+function realReducer(state, action) {
+  if (action.type === 'SET_FULL') {
+    return { job: action.job, artifactMap: buildArtifactMap(action.job.artifacts ?? []) }
+  }
+  if (action.type === 'EVENT' && state.job) {
+    const { job, artifactMap } = applyEvent(
+      state.job, state.artifactMap, action.eventType, action.payload
+    )
+    return { job, artifactMap }
+  }
+  return state
+}
+
 function useRealJob(jobId) {
-  const [job, setJob] = useState(null)
-  const [artifactMap, setArtifactMap] = useState({})
+  const [{ job, artifactMap }, dispatch] = useReducer(realReducer, {
+    job: null,
+    artifactMap: {},
+  })
   const [isConnected, setIsConnected] = useState(false)
   const esRef = useRef(null)
   const pollRef = useRef(null)
@@ -110,8 +132,7 @@ function useRealJob(jobId) {
       const res = await fetch(`/api/jobs/${jobId}`)
       if (!res.ok) return
       const data = await res.json()
-      setJob(data)
-      setArtifactMap(buildArtifactMap(data.artifacts ?? []))
+      dispatch({ type: 'SET_FULL', job: data })
     } catch {
       // silent — SSE is primary; polling is fallback
     }
@@ -141,19 +162,11 @@ function useRealJob(jobId) {
     }
 
     function handleEvent(eventType, payload) {
-      setJob((prev) => {
-        if (!prev) return prev
-        setArtifactMap((prevMap) => {
-          const { job: nextJob, artifactMap: nextMap } = applyEvent(prev, prevMap, eventType, payload)
-          setJob(nextJob)
-          return nextMap
-        })
-        return prev
-      })
+      dispatch({ type: 'EVENT', eventType, payload })
     }
 
     // artifact_ready carries only {artifact_id, type, index} — re-fetch for
-    // file_url / text_content which are only available on the REST endpoint.
+    // file_url / text_content which are only on the REST endpoint.
     es.addEventListener('status_changed',  (e) => handleEvent('status_changed',  JSON.parse(e.data)))
     es.addEventListener('artifact_ready',  () => fetchJob())
     es.addEventListener('artifact_failed', (e) => handleEvent('artifact_failed', JSON.parse(e.data)))
@@ -169,18 +182,21 @@ function useRealJob(jobId) {
     }
   }, [jobId, fetchJob])
 
-  const artifacts = Object.values(artifactMap)
-  return { job, artifacts, isConnected, refetch: fetchJob }
+  return {
+    job,
+    artifacts: Object.values(artifactMap),
+    isConnected,
+    refetch: fetchJob,
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Public hook — switches between mock and real based on USE_REAL_API flag
+// Public hook
 // ---------------------------------------------------------------------------
 
 export default function useJob(jobId) {
   if (USE_REAL_API) {
-    // Rules-of-hooks: both branches always call the same hook internally.
-    // The flag is a module-level constant, so the call order never changes at runtime.
+    // Rules-of-hooks: flag is module-level constant; call order never changes.
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return useRealJob(jobId)
   }
