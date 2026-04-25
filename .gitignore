@@ -12,8 +12,13 @@ db.sqlite3
 media/
 staticfiles/
 
-# Pytest
+# Pytest / coverage
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Claude Code per-project session state
+.claude/
 
 # Node
 node_modules/

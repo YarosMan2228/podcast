@@ -37,7 +37,12 @@ services:
 
   worker:
     build: .
-    command: celery -A core worker --loglevel=info --concurrency=4
+    # -Q must list every queue our tasks dispatch to. Pipeline tasks
+    # (start_job/transcribe/analyze/orchestrate/package) go to "default"
+    # (settings.CELERY_TASK_DEFAULT_QUEUE); artifact workers explicitly
+    # set queue= in apply_async. Without -Q the worker only consumes
+    # "celery" and everything else sits on the broker forever.
+    command: celery -A core worker --loglevel=info --concurrency=4 -Q default,video,text_artifacts,graphics
     environment:
       - POSTGRES_HOST=db
       - REDIS_URL=redis://redis:6379/0

@@ -248,14 +248,47 @@ def _render_clip(artifact: Artifact, regenerate: bool) -> None:
 
     # Relative path under MEDIA_ROOT so the Day-4 SSE payload / download
     # endpoint can compose a URL without caring about the absolute root.
-    rel_path = os.path.relpath(str(output_path), settings.MEDIA_ROOT)
+    rel_path = os.path.relpath(str(output_path), settings.MEDIA_ROOT).replace("\\", "/")
+
+    # Capture the previous version's file path before we overwrite the row;
+    # we clean it from disk *after* the DB swap so a failure here can't
+    # leave the artifact pointing at a missing file.
+    previous_file_path = artifact.file_path
 
     Artifact.objects.filter(id=artifact.id).update(
         status=ArtifactStatus.READY,
-        file_path=rel_path.replace("\\", "/"),
+        file_path=rel_path,
         metadata_json=metadata,
         error=None,
     )
+
+    # SPEC §7 (technical debt cleanup): regenerate bumps `version` and writes
+    # `clip_<idx>_v<N+1>.mp4` to disk, but the old `_v<N>.mp4` was lingering
+    # forever — five regenerates × five clips = 25 stale mp4s per episode.
+    # Best-effort delete the previous version after the DB swap is committed.
+    if regenerate and previous_file_path and previous_file_path != rel_path:
+        previous_abs = Path(settings.MEDIA_ROOT) / previous_file_path
+        try:
+            if previous_abs.exists():
+                previous_abs.unlink()
+                logger.info(
+                    "video_clip_previous_version_cleaned",
+                    extra={
+                        "job_id": str(job.id),
+                        "artifact_id": str(artifact.id),
+                        "deleted": previous_file_path,
+                    },
+                )
+        except OSError as exc:
+            logger.warning(
+                "video_clip_previous_version_cleanup_failed",
+                extra={
+                    "job_id": str(job.id),
+                    "artifact_id": str(artifact.id),
+                    "path": previous_file_path,
+                    "error": str(exc),
+                },
+            )
 
 
 # ---------------------------------------------------------------------------

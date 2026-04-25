@@ -9,6 +9,7 @@ import logging
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
+from django.utils import timezone as djtz
 
 from core.celery import celery_app
 from jobs.models import (
@@ -113,8 +114,14 @@ def _fail_job(job_id: str, from_status: str, code: str, message: str) -> None:
     ``transition_job_status`` already publishes a ``status_changed`` event;
     we piggy-back an ``artifact_failed``-shaped payload onto it by writing
     ``error`` to the Job row first so any `GET /api/jobs/:id` reader sees it.
+
+    Also stamps ``completed_at`` — FAILED is a terminal state, so the field
+    should not stay null (otherwise UI / analytics can't sort or compute
+    "time spent" for failed jobs).
     """
-    Job.objects.filter(id=job_id).update(error=f"{code}: {message}")
+    Job.objects.filter(id=job_id).update(
+        error=f"{code}: {message}", completed_at=djtz.now()
+    )
     transition_job_status(job_id, from_status, JobStatus.FAILED)
     # 'message' is reserved on LogRecord — use 'error_message' in extras.
     logger.warning(

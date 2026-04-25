@@ -455,3 +455,113 @@ class TestUrlIngestionEnospc:
                 download_from_url("https://youtube.com/watch?v=x", tmp_path)
 
         assert exc.value.code == "URL_YTDLP_FAILED"
+
+
+# ===========================================================================
+# §7 (technical debt) — regenerate cleans up the previous version's mp4
+# ===========================================================================
+
+
+class TestVideoClipRegenerateCleanup:
+    def test_regenerate_deletes_previous_version_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Without cleanup, every regenerate leaves a stale mp4 on disk —
+        five regens × five clips = 25 orphaned files per episode (STATUS §7)."""
+        media = tmp_path / "media"
+        artifacts_root = media / "artifacts"
+
+        job = _make_full_job(tmp_path)
+        artifact = _make_artifact(job, ArtifactType.VIDEO_CLIP, index=0)
+
+        # Simulate a v1 already on disk from the original render.
+        old_dir = artifacts_root / str(job.id)
+        old_dir.mkdir(parents=True)
+        old_file = old_dir / "clip_0_v1.mp4"
+        old_file.write_bytes(b"\x00" * 8192)
+        artifact.file_path = f"artifacts/{job.id}/clip_0_v1.mp4"
+        artifact.status = ArtifactStatus.READY
+        artifact.metadata_json = {"used_candidate_indices": [0]}
+        artifact.save()
+
+        def _stub_render(*, output_path: str, **_) -> None:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_bytes(b"\x00" * 8192)
+
+        with override_settings(
+            MEDIA_ROOT=str(media), ARTIFACTS_ROOT=str(artifacts_root)
+        ), patch(
+            "workers.video_clip_worker.build_vertical_clip",
+            side_effect=_stub_render,
+        ), patch("workers.video_clip_worker.publish"):
+            generate_video_clip.apply_async(args=[str(artifact.id), True])
+
+        artifact.refresh_from_db()
+        # New version persisted, old file deleted.
+        assert artifact.file_path.endswith("clip_0_v2.mp4")
+        assert (media / artifact.file_path).exists()
+        assert not old_file.exists(), "previous version should have been cleaned"
+
+    def test_initial_render_does_not_attempt_cleanup(
+        self, tmp_path: Path
+    ) -> None:
+        """First render of an artifact has no previous file — cleanup must
+        be skipped, not crash on the missing path."""
+        job = _make_full_job(tmp_path)
+        artifact = _make_artifact(job, ArtifactType.VIDEO_CLIP, index=0)
+        # file_path is empty initially.
+
+        def _stub_render(*, output_path: str, **_) -> None:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_bytes(b"\x00" * 8192)
+
+        with override_settings(
+            MEDIA_ROOT=str(tmp_path / "media"),
+            ARTIFACTS_ROOT=str(tmp_path / "media" / "artifacts"),
+        ), patch(
+            "workers.video_clip_worker.build_vertical_clip",
+            side_effect=_stub_render,
+        ), patch("workers.video_clip_worker.publish"):
+            # Initial render → regenerate=False, cleanup branch skipped.
+            generate_video_clip.apply_async(args=[str(artifact.id)])
+
+        artifact.refresh_from_db()
+        assert artifact.status == ArtifactStatus.READY
+
+
+# ===========================================================================
+# §7 (technical debt) — completed_at is stamped on FAILED jobs too
+# ===========================================================================
+
+
+class TestCompletedAtOnFailedJobs:
+    def test_pipeline_failure_stamps_completed_at(self) -> None:
+        """Without this, completed_at stays NULL on FAILED → analytics can't
+        compute "time-to-failure" or "when did this break"."""
+        job = Job.objects.create(
+            source_type=SourceType.FILE, status=JobStatus.PENDING
+        )
+        with patch(
+            "workers.tasks.ingest_job",
+            side_effect=IngestionError("INGESTION_NORMALIZE_FAILED", "boom"),
+        ):
+            start_job.apply_async(args=[str(job.id)])
+
+        job.refresh_from_db()
+        assert job.status == JobStatus.FAILED
+        assert job.completed_at is not None
+
+    def test_packager_failure_stamps_completed_at(self, tmp_path: Path) -> None:
+        """Same guarantee on the packaging-side failure paths."""
+        job = _make_full_job(tmp_path, status=JobStatus.GENERATING)
+        # No artifacts → PACKAGE_EMPTY path.
+        with override_settings(MEDIA_ROOT=str(tmp_path / "media")), patch(
+            "workers.packager.publish"
+        ):
+            (tmp_path / "media" / "packages").mkdir(parents=True, exist_ok=True)
+            package_job.apply_async(args=[str(job.id)])
+
+        job.refresh_from_db()
+        assert job.status == JobStatus.FAILED
+        assert "PACKAGE_EMPTY" in (job.error or "")
+        assert job.completed_at is not None

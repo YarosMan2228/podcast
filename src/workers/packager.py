@@ -294,7 +294,8 @@ def package_job(self, job_id: str) -> None:
         # Orchestrator created no artifacts — fail loudly rather than ship
         # an empty zip that the user would think is broken.
         Job.objects.filter(id=job_id).update(
-            error="PACKAGE_EMPTY: no artifacts to package"
+            error="PACKAGE_EMPTY: no artifacts to package",
+            completed_at=djtz.now(),
         )
         _safe_transition(job_id, JobStatus.FAILED)
         return
@@ -302,7 +303,8 @@ def package_job(self, job_id: str) -> None:
     ready_count = sum(1 for a in artifacts if a.status == ArtifactStatus.READY)
     if ready_count == 0:
         Job.objects.filter(id=job_id).update(
-            error="PACKAGE_ALL_FAILED: every artifact is in FAILED state"
+            error="PACKAGE_ALL_FAILED: every artifact is in FAILED state",
+            completed_at=djtz.now(),
         )
         _safe_transition(job_id, JobStatus.FAILED)
         return
@@ -332,7 +334,8 @@ def package_job(self, job_id: str) -> None:
             pass
         Job.objects.filter(id=job_id).update(
             error=f"PACKAGE_TIMEOUT: soft_time_limit "
-            f"({package_job.soft_time_limit}s) exceeded"
+            f"({package_job.soft_time_limit}s) exceeded",
+            completed_at=djtz.now(),
         )
         _safe_transition(job_id, JobStatus.FAILED)
         return
@@ -340,7 +343,9 @@ def package_job(self, job_id: str) -> None:
         logger.exception(
             "package_job_zip_failed", extra={"job_id": str(job_id)}
         )
-        Job.objects.filter(id=job_id).update(error=f"PACKAGE_IO_ERROR: {exc}")
+        Job.objects.filter(id=job_id).update(
+            error=f"PACKAGE_IO_ERROR: {exc}", completed_at=djtz.now()
+        )
         _safe_transition(job_id, JobStatus.FAILED)
         return
 
