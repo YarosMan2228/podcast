@@ -32,9 +32,23 @@ function groupByType(artifacts) {
   return groups
 }
 
+async function postRegenerate(artifactId, tone) {
+  const body = tone ? JSON.stringify({ tone }) : JSON.stringify({})
+  await fetch(`/api/artifacts/${artifactId}/regenerate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  })
+}
+
 export default function JobPage() {
   const { jobId } = useParams()
-  const { job, artifacts, isConnected } = useJob(jobId)
+  const { job, artifacts, isConnected, refetch } = useJob(jobId)
+
+  async function handleRegenerate(artifact) {
+    await postRegenerate(artifact.id, artifact.metadata?.tone ?? null)
+    refetch()
+  }
 
   if (!job) {
     return (
@@ -136,9 +150,7 @@ export default function JobPage() {
                     <ArtifactCard
                       key={art.id}
                       artifact={art}
-                      onRegenerate={() => {
-                        // Day 4: POST /api/artifacts/:id/regenerate
-                      }}
+                      onRegenerate={handleRegenerate}
                     />
                   ))}
               </div>

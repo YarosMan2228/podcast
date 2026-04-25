@@ -105,3 +105,33 @@ class JobNotFound(ApiError):
     def __init__(self, job_id: str | None = None) -> None:
         msg = f"Job {job_id!r} not found." if job_id else self.default_message
         super().__init__(message=msg, field="job_id")
+
+
+class ArtifactNotFound(ApiError):
+    """``POST /api/artifacts/:id/regenerate`` — unknown artifact id."""
+
+    status_code = 404
+    default_code = "ARTIFACT_NOT_FOUND"
+    default_message = "Artifact not found."
+
+    def __init__(self, artifact_id: str | None = None) -> None:
+        msg = (
+            f"Artifact {artifact_id!r} not found."
+            if artifact_id
+            else self.default_message
+        )
+        super().__init__(message=msg, field="artifact_id")
+
+
+class InvalidTone(ApiError):
+    """``POST /api/artifacts/:id/regenerate`` — unsupported tone value."""
+
+    status_code = 400
+    default_code = "INVALID_TONE"
+    default_message = "Invalid tone."
+
+    def __init__(self, tone: str, valid: set[str]) -> None:
+        super().__init__(
+            message=f"Tone {tone!r} is not allowed. Valid: {sorted(valid)}.",
+            field="tone",
+        )

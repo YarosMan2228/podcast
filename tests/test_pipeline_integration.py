@@ -160,7 +160,19 @@ def test_full_pipeline_upload_to_video_clips(tmp_path: Path) -> None:
     ), patch(
         "workers.video_clip_worker.build_vertical_clip",
         side_effect=_ffmpeg_stub_writes_output,
-    ) as ff_clip:
+    ) as ff_clip, patch(
+        "workers.text_artifact_worker.generate_linkedin_post.apply_async"
+    ), patch(
+        "workers.text_artifact_worker.generate_twitter_thread.apply_async"
+    ), patch(
+        "workers.text_artifact_worker.generate_show_notes.apply_async"
+    ), patch(
+        "workers.text_artifact_worker.generate_newsletter.apply_async"
+    ), patch(
+        "workers.text_artifact_worker.generate_youtube_description.apply_async"
+    ), patch(
+        "workers.quote_graphic_worker.generate_quote_graphic.apply_async"
+    ):
         start_job.apply_async(args=[str(job.id)])
 
     # -------- Job reached the fan-out stage --------

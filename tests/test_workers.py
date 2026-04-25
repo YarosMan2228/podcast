@@ -287,23 +287,43 @@ def test_orchestrate_task_uses_standard_decorator() -> None:
     assert orchestrate_artifacts.acks_late is True
 
 
+def _patch_all_workers():
+    """Patch every apply_async dispatched by orchestrate_artifacts."""
+    return (
+        patch("workers.video_clip_worker.generate_video_clip.apply_async"),
+        patch("workers.text_artifact_worker.generate_linkedin_post.apply_async"),
+        patch("workers.text_artifact_worker.generate_twitter_thread.apply_async"),
+        patch("workers.text_artifact_worker.generate_show_notes.apply_async"),
+        patch("workers.text_artifact_worker.generate_newsletter.apply_async"),
+        patch("workers.text_artifact_worker.generate_youtube_description.apply_async"),
+        patch("workers.quote_graphic_worker.generate_quote_graphic.apply_async"),
+    )
+
+
 def test_orchestrate_creates_five_video_clips_and_enqueues_each() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
     _make_analysis(job, candidate_count=10)  # more than we'll schedule
 
-    with patch(
-        "workers.video_clip_worker.generate_video_clip.apply_async"
-    ) as kick:
+    with (
+        patch("workers.video_clip_worker.generate_video_clip.apply_async") as kick,
+        patch("workers.text_artifact_worker.generate_linkedin_post.apply_async"),
+        patch("workers.text_artifact_worker.generate_twitter_thread.apply_async"),
+        patch("workers.text_artifact_worker.generate_show_notes.apply_async"),
+        patch("workers.text_artifact_worker.generate_newsletter.apply_async"),
+        patch("workers.text_artifact_worker.generate_youtube_description.apply_async"),
+        patch("workers.quote_graphic_worker.generate_quote_graphic.apply_async"),
+    ):
         orchestrate_artifacts.apply_async(args=[str(job.id)])
 
     job.refresh_from_db()
     assert job.status == JobStatus.GENERATING
-    artifacts = list(Artifact.objects.filter(job=job).order_by("index"))
-    assert len(artifacts) == NUM_VIDEO_CLIPS
-    assert {a.type for a in artifacts} == {ArtifactType.VIDEO_CLIP}
-    assert {a.status for a in artifacts} == {ArtifactStatus.QUEUED}
-    assert [a.index for a in artifacts] == list(range(NUM_VIDEO_CLIPS))
-    # One apply_async per artifact, all on the "video" queue.
+    clips = list(
+        Artifact.objects.filter(job=job, type=ArtifactType.VIDEO_CLIP).order_by("index")
+    )
+    assert len(clips) == NUM_VIDEO_CLIPS
+    assert {a.status for a in clips} == {ArtifactStatus.QUEUED}
+    assert [a.index for a in clips] == list(range(NUM_VIDEO_CLIPS))
+    # One apply_async per clip, all on the "video" queue.
     assert kick.call_count == NUM_VIDEO_CLIPS
     for call in kick.call_args_list:
         assert call.kwargs.get("queue") == "video"
@@ -314,10 +334,18 @@ def test_orchestrate_clamps_to_number_of_available_candidates() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
     _make_analysis(job, candidate_count=2)
 
-    with patch("workers.video_clip_worker.generate_video_clip.apply_async") as kick:
+    with (
+        patch("workers.video_clip_worker.generate_video_clip.apply_async") as kick,
+        patch("workers.text_artifact_worker.generate_linkedin_post.apply_async"),
+        patch("workers.text_artifact_worker.generate_twitter_thread.apply_async"),
+        patch("workers.text_artifact_worker.generate_show_notes.apply_async"),
+        patch("workers.text_artifact_worker.generate_newsletter.apply_async"),
+        patch("workers.text_artifact_worker.generate_youtube_description.apply_async"),
+        patch("workers.quote_graphic_worker.generate_quote_graphic.apply_async"),
+    ):
         orchestrate_artifacts.apply_async(args=[str(job.id)])
 
-    assert Artifact.objects.filter(job=job).count() == 2
+    assert Artifact.objects.filter(job=job, type=ArtifactType.VIDEO_CLIP).count() == 2
     assert kick.call_count == 2
 
 
@@ -348,15 +376,31 @@ def test_orchestrate_is_idempotent_on_rerun() -> None:
     job = Job.objects.create(source_type=SourceType.FILE, status=JobStatus.ANALYZING)
     _make_analysis(job, candidate_count=5)
 
-    with patch("workers.video_clip_worker.generate_video_clip.apply_async"):
+    with (
+        patch("workers.video_clip_worker.generate_video_clip.apply_async"),
+        patch("workers.text_artifact_worker.generate_linkedin_post.apply_async"),
+        patch("workers.text_artifact_worker.generate_twitter_thread.apply_async"),
+        patch("workers.text_artifact_worker.generate_show_notes.apply_async"),
+        patch("workers.text_artifact_worker.generate_newsletter.apply_async"),
+        patch("workers.text_artifact_worker.generate_youtube_description.apply_async"),
+        patch("workers.quote_graphic_worker.generate_quote_graphic.apply_async"),
+    ):
         orchestrate_artifacts.apply_async(args=[str(job.id)])
 
     # Simulate the orchestrator being kicked a second time with the job
     # already at GENERATING — mimics a worker crash + requeue.
     Job.objects.filter(id=job.id).update(status=JobStatus.ANALYZING)
-    with patch("workers.video_clip_worker.generate_video_clip.apply_async"):
+    with (
+        patch("workers.video_clip_worker.generate_video_clip.apply_async"),
+        patch("workers.text_artifact_worker.generate_linkedin_post.apply_async"),
+        patch("workers.text_artifact_worker.generate_twitter_thread.apply_async"),
+        patch("workers.text_artifact_worker.generate_show_notes.apply_async"),
+        patch("workers.text_artifact_worker.generate_newsletter.apply_async"),
+        patch("workers.text_artifact_worker.generate_youtube_description.apply_async"),
+        patch("workers.quote_graphic_worker.generate_quote_graphic.apply_async"),
+    ):
         orchestrate_artifacts.apply_async(args=[str(job.id)])
 
-    # Same 5 rows — update_or_create keyed on (job, type, index) prevents
+    # Same rows per type — update_or_create keyed on (job, type, index) prevents
     # duplicates (rules/celery-tasks.md §3).
-    assert Artifact.objects.filter(job=job).count() == NUM_VIDEO_CLIPS
+    assert Artifact.objects.filter(job=job, type=ArtifactType.VIDEO_CLIP).count() == NUM_VIDEO_CLIPS

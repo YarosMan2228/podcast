@@ -27,11 +27,10 @@ from services.events import publish
 logger = logging.getLogger(__name__)
 
 
-# SPEC §5.1 — five parallel VIDEO_CLIP artifacts per episode. The
-# orchestrator clamps against the actual number of clip_candidates Claude
-# returned (a very short episode may yield fewer; SPEC §3.5 / §4.5
-# guarantee at least 2 for anything worth clipping).
+# SPEC §5.1 — five parallel VIDEO_CLIP artifacts per episode.
 NUM_VIDEO_CLIPS = 5
+# SPEC §7.3 — five quote graphic artifacts per episode.
+NUM_QUOTE_GRAPHICS = 5
 
 
 class InvalidTransition(Exception):
@@ -231,22 +230,53 @@ def orchestrate_artifacts(self, job_id: str) -> None:
         )
         return
 
-    # Deferred import: the worker module pulls in ffmpeg-related helpers
-    # that the ingestion / analysis test paths shouldn't have to load.
+    # Deferred imports keep heavy modules out of the ingestion/analysis path.
     from workers.video_clip_worker import generate_video_clip
+    from workers.text_artifact_worker import (
+        generate_linkedin_post,
+        generate_newsletter,
+        generate_show_notes,
+        generate_twitter_thread,
+        generate_youtube_description,
+    )
+    from workers.quote_graphic_worker import generate_quote_graphic
 
+    # ── Video clips ──────────────────────────────────────────────────────
     for idx in range(clip_count):
         artifact, _ = Artifact.objects.update_or_create(
             job_id=job_id,
             type=ArtifactType.VIDEO_CLIP,
             index=idx,
-            defaults={
-                "status": ArtifactStatus.QUEUED,
-                "metadata_json": {},
-                "error": None,
-            },
+            defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
         )
         generate_video_clip.apply_async(args=[str(artifact.id)], queue="video")
+
+    # ── Text artifacts (SPEC §6.4) ────────────────────────────────────────
+    _TEXT_ARTIFACT_TASKS = [
+        (ArtifactType.LINKEDIN_POST, generate_linkedin_post),
+        (ArtifactType.TWITTER_THREAD, generate_twitter_thread),
+        (ArtifactType.SHOW_NOTES, generate_show_notes),
+        (ArtifactType.NEWSLETTER, generate_newsletter),
+        (ArtifactType.YOUTUBE_DESCRIPTION, generate_youtube_description),
+    ]
+    for artifact_type, task in _TEXT_ARTIFACT_TASKS:
+        artifact, _ = Artifact.objects.update_or_create(
+            job_id=job_id,
+            type=artifact_type,
+            index=0,
+            defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
+        )
+        task.apply_async(args=[str(artifact.id)], queue="text_artifacts")
+
+    # ── Quote graphics (SPEC §7.3) ────────────────────────────────────────
+    for idx in range(NUM_QUOTE_GRAPHICS):
+        artifact, _ = Artifact.objects.update_or_create(
+            job_id=job_id,
+            type=ArtifactType.QUOTE_GRAPHIC,
+            index=idx,
+            defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
+        )
+        generate_quote_graphic.apply_async(args=[str(artifact.id)], queue="graphics")
 
     logger.info(
         "task_completed",
@@ -254,5 +284,7 @@ def orchestrate_artifacts(self, job_id: str) -> None:
             "task": "orchestrate_artifacts",
             "job_id": job_id,
             "video_clip_count": clip_count,
+            "text_artifact_count": len(_TEXT_ARTIFACT_TASKS),
+            "quote_graphic_count": NUM_QUOTE_GRAPHICS,
         },
     )

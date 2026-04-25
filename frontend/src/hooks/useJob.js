@@ -1,12 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
-import {
-  job_state_processing,
-  job_state_completed,
-  MOCK_SSE_SEQUENCE,
-} from '../api/mocks.js'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { job_state_processing, MOCK_SSE_SEQUENCE } from '../api/mocks.js'
 
-// Set to true to use real API (Day 4+). False = mock mode.
-const USE_REAL_API = false
+const USE_REAL_API = true
 
 // ---------------------------------------------------------------------------
 // Mock mode helpers
@@ -23,10 +18,7 @@ export function applyEvent(job, artifactMap, eventType, payload) {
 
     case 'artifact_ready': {
       const { artifact_id, type, index } = payload
-      // Merge into the existing artifact entry from the initial snapshot
       const existing = artifactMap[artifact_id] ?? { id: artifact_id, type, index }
-      // Find full data from completed snapshot (has file_url, text_content, etc.)
-      const full = job_state_completed.artifacts.find((a) => a.id === artifact_id) ?? existing
       return {
         job: {
           ...job,
@@ -37,7 +29,7 @@ export function applyEvent(job, artifactMap, eventType, payload) {
             queued: Math.max(0, (job.progress.queued ?? 0) - 1),
           },
         },
-        artifactMap: { ...artifactMap, [artifact_id]: { ...full, status: 'READY' } },
+        artifactMap: { ...artifactMap, [artifact_id]: { ...existing, status: 'READY' } },
       }
     }
 
@@ -112,20 +104,21 @@ function useRealJob(jobId) {
   const esRef = useRef(null)
   const pollRef = useRef(null)
 
+  const fetchJob = useCallback(async () => {
+    if (!jobId) return
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setJob(data)
+      setArtifactMap(buildArtifactMap(data.artifacts ?? []))
+    } catch {
+      // silent — SSE is primary; polling is fallback
+    }
+  }, [jobId])
+
   useEffect(() => {
     if (!jobId) return
-
-    async function fetchJob() {
-      try {
-        const res = await fetch(`/api/jobs/${jobId}`)
-        if (!res.ok) return
-        const data = await res.json()
-        setJob(data)
-        setArtifactMap(buildArtifactMap(data.artifacts ?? []))
-      } catch {
-        // silent — SSE is primary; polling is fallback
-      }
-    }
 
     fetchJob()
 
@@ -159,8 +152,10 @@ function useRealJob(jobId) {
       })
     }
 
+    // artifact_ready carries only {artifact_id, type, index} — re-fetch for
+    // file_url / text_content which are only available on the REST endpoint.
     es.addEventListener('status_changed',  (e) => handleEvent('status_changed',  JSON.parse(e.data)))
-    es.addEventListener('artifact_ready',  (e) => handleEvent('artifact_ready',  JSON.parse(e.data)))
+    es.addEventListener('artifact_ready',  () => fetchJob())
     es.addEventListener('artifact_failed', (e) => handleEvent('artifact_failed', JSON.parse(e.data)))
     es.addEventListener('completed',       (e) => handleEvent('completed',       JSON.parse(e.data)))
 
@@ -172,10 +167,10 @@ function useRealJob(jobId) {
         pollRef.current = null
       }
     }
-  }, [jobId])
+  }, [jobId, fetchJob])
 
   const artifacts = Object.values(artifactMap)
-  return { job, artifacts, isConnected }
+  return { job, artifacts, isConnected, refetch: fetchJob }
 }
 
 // ---------------------------------------------------------------------------

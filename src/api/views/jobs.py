@@ -35,8 +35,8 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from api.errors import JobNotFound
-from jobs.models import Artifact, ArtifactStatus, Job
+from api.errors import ArtifactNotFound, InvalidTone, JobNotFound
+from jobs.models import Artifact, ArtifactStatus, ArtifactType, Job
 
 logger = logging.getLogger(__name__)
 
@@ -261,3 +261,124 @@ def job_events(request: Request, job_id: str) -> StreamingHttpResponse:
     response["X-Accel-Buffering"] = "no"
     response["Connection"] = "keep-alive"
     return response
+
+
+# ---------------------------------------------------------------------------
+# POST /api/artifacts/:id/regenerate — SPEC §5.3, §6.3
+# ---------------------------------------------------------------------------
+
+_VALID_TONES: frozenset[str] = frozenset(
+    {"analytical", "casual", "punchy", "professional"}
+)
+
+_TEXT_ARTIFACT_TYPES: frozenset[str] = frozenset(
+    {
+        ArtifactType.LINKEDIN_POST,
+        ArtifactType.TWITTER_THREAD,
+        ArtifactType.SHOW_NOTES,
+        ArtifactType.NEWSLETTER,
+        ArtifactType.YOUTUBE_DESCRIPTION,
+    }
+)
+
+
+def _dispatch_worker(artifact: Artifact, tone: str | None) -> None:
+    """Dispatch the right worker task for a re-queued artifact."""
+    if artifact.type == ArtifactType.VIDEO_CLIP:
+        from workers.video_clip_worker import generate_video_clip
+
+        generate_video_clip.apply_async(
+            args=[str(artifact.id), True], queue="video"
+        )
+
+    elif artifact.type in _TEXT_ARTIFACT_TYPES:
+        from workers.text_artifact_worker import (
+            generate_linkedin_post,
+            generate_newsletter,
+            generate_show_notes,
+            generate_twitter_thread,
+            generate_youtube_description,
+        )
+
+        _task_map = {
+            ArtifactType.LINKEDIN_POST: generate_linkedin_post,
+            ArtifactType.TWITTER_THREAD: generate_twitter_thread,
+            ArtifactType.SHOW_NOTES: generate_show_notes,
+            ArtifactType.NEWSLETTER: generate_newsletter,
+            ArtifactType.YOUTUBE_DESCRIPTION: generate_youtube_description,
+        }
+        task = _task_map[artifact.type]
+        args: list = [str(artifact.id)]
+        if tone:
+            args.append(tone)
+        task.apply_async(args=args, queue="text_artifacts")
+
+    elif artifact.type == ArtifactType.QUOTE_GRAPHIC:
+        from workers.quote_graphic_worker import generate_quote_graphic
+
+        generate_quote_graphic.apply_async(args=[str(artifact.id)], queue="graphics")
+
+    else:
+        logger.warning(
+            "regenerate_unknown_type",
+            extra={"artifact_id": str(artifact.id), "type": artifact.type},
+        )
+
+
+@api_view(["POST"])
+def regenerate_artifact(request: Request, artifact_id: str) -> Response:
+    """Increment artifact version, reset to QUEUED, dispatch worker.
+
+    Body (JSON, optional):
+        ``{"tone": "casual"}``   — for text artifact tone variations.
+
+    Returns 202:
+        ``{"artifact_id": "...", "status": "QUEUED", "version": 2}``
+    """
+    try:
+        normalized_id = str(uuid.UUID(artifact_id))
+    except (ValueError, TypeError):
+        raise ArtifactNotFound(artifact_id=artifact_id)
+
+    try:
+        artifact = Artifact.objects.get(id=normalized_id)
+    except Artifact.DoesNotExist:
+        raise ArtifactNotFound(artifact_id=artifact_id)
+
+    tone: str | None = None
+    if request.data:
+        raw_tone = request.data.get("tone")
+        if raw_tone is not None:
+            if raw_tone not in _VALID_TONES:
+                raise InvalidTone(raw_tone, set(_VALID_TONES))
+            tone = raw_tone
+
+    new_version = artifact.version + 1
+    Artifact.objects.filter(id=artifact.id).update(
+        version=new_version,
+        status=ArtifactStatus.QUEUED,
+        error=None,
+    )
+    artifact.version = new_version
+    artifact.status = ArtifactStatus.QUEUED
+
+    _dispatch_worker(artifact, tone)
+
+    logger.info(
+        "artifact_requeued",
+        extra={
+            "artifact_id": str(artifact.id),
+            "type": artifact.type,
+            "version": new_version,
+            "tone": tone,
+        },
+    )
+
+    return Response(
+        {
+            "artifact_id": str(artifact.id),
+            "status": ArtifactStatus.QUEUED,
+            "version": new_version,
+        },
+        status=202,
+    )
