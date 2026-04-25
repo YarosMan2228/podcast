@@ -2,6 +2,7 @@ import { useParams } from 'react-router-dom'
 import useJob from '../hooks/useJob.js'
 import JobProgressBar from '../components/JobProgressBar.jsx'
 import ArtifactCard from '../components/ArtifactCard.jsx'
+import { regenerateArtifact } from '../api/client.js'
 
 const SECTION_ORDER = [
   'VIDEO_CLIP',
@@ -32,21 +33,12 @@ function groupByType(artifacts) {
   return groups
 }
 
-async function postRegenerate(artifactId, tone) {
-  const body = tone ? JSON.stringify({ tone }) : JSON.stringify({})
-  await fetch(`/api/artifacts/${artifactId}/regenerate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  })
-}
-
 export default function JobPage() {
   const { jobId } = useParams()
   const { job, artifacts, isConnected, refetch } = useJob(jobId)
 
-  async function handleRegenerate(artifact) {
-    await postRegenerate(artifact.id, artifact.metadata?.tone ?? null)
+  async function handleRegenerate(artifact, tone) {
+    await regenerateArtifact(artifact.id, tone ?? null)
     refetch()
   }
 
