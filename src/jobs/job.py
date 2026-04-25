@@ -21,6 +21,8 @@ class Job(djmodels.Model):
     original_filename = djmodels.CharField(max_length=255, null=True, blank=True)
     raw_media_path = djmodels.TextField(null=True, blank=True)
     normalized_wav_path = djmodels.TextField(null=True, blank=True)
+    # SPEC §8.2 — set by ``workers.packager.package_job`` once the ZIP is on disk.
+    package_path = djmodels.TextField(null=True, blank=True)
     duration_sec = djmodels.FloatField(null=True, blank=True)
     file_size_bytes = djmodels.BigIntegerField(null=True, blank=True)
     mime_type = djmodels.CharField(max_length=64, null=True, blank=True)

@@ -277,6 +277,9 @@ def _mark_failed(artifact_id: str, job_id: str, code: str, message: str) -> None
             "error_message": message,
         },
     )
+    # SPEC §9.4: a terminal artifact may be the last one — try packaging.
+    from workers.tasks import check_and_trigger_packaging
+    check_and_trigger_packaging(str(job_id))
 
 
 @celery_app.task(
@@ -352,6 +355,8 @@ def generate_video_clip(self, artifact_id: str, regenerate: bool = False) -> Non
             "index": artifact.index,
         },
     )
+    from workers.tasks import check_and_trigger_packaging
+    check_and_trigger_packaging(str(artifact.job_id))
     logger.info(
         "task_completed",
         extra={

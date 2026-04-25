@@ -35,8 +35,8 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from api.errors import ArtifactNotFound, InvalidTone, JobNotFound
-from jobs.models import Artifact, ArtifactStatus, ArtifactType, Job
+from api.errors import ArtifactNotFound, InvalidTone, JobNotFound, PackageNotReady
+from jobs.models import Artifact, ArtifactStatus, ArtifactType, Job, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,16 @@ def _progress_counters(artifacts: list[Artifact]) -> dict[str, int]:
     return counters
 
 
+def _package_url_for(job: Job) -> str | None:
+    """SPEC §8.2 — public URL of the packaged ZIP, or ``None`` until ready."""
+    if not job.package_path:
+        return None
+    media_url = settings.MEDIA_URL or "/media/"
+    if not media_url.endswith("/"):
+        media_url += "/"
+    return media_url + job.package_path.lstrip("/").replace("\\", "/")
+
+
 def _serialize_job(job: Job) -> dict[str, Any]:
     """Full SPEC §9.3 response body."""
     artifacts = list(
@@ -122,10 +132,7 @@ def _serialize_job(job: Job) -> dict[str, Any]:
         "progress": _progress_counters(artifacts),
         "analysis": analysis_block,
         "artifacts": [_serialize_artifact(a) for a in artifacts],
-        # Packaging (Person B, Day 5) will wire a real URL once the
-        # ``jobs.package_path`` column lands; until then the frontend
-        # sees ``null`` which its ``useJob`` hook already handles.
-        "package_url": None,
+        "package_url": _package_url_for(job),
         "error": job.error,
     }
 
@@ -382,3 +389,71 @@ def regenerate_artifact(request: Request, artifact_id: str) -> Response:
         },
         status=202,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/jobs/:id/download — SPEC §9.3
+# ---------------------------------------------------------------------------
+
+
+# Stream chunk size for the ZIP body. 64KB keeps memory bounded while still
+# matching the OS readahead, so throughput is dominated by the network.
+_ZIP_STREAM_CHUNK = 64 * 1024
+
+
+def _stream_file(path: "Path", chunk_size: int = _ZIP_STREAM_CHUNK) -> Iterator[bytes]:
+    """Yield *path* in fixed-size chunks; closes the handle in ``finally``."""
+    fh = path.open("rb")
+    try:
+        while True:
+            chunk = fh.read(chunk_size)
+            if not chunk:
+                return
+            yield chunk
+    finally:
+        fh.close()
+
+
+@api_view(["GET"])
+def download_package(request: Request, job_id: str) -> StreamingHttpResponse:
+    """Stream the packaged ZIP for a COMPLETED job (SPEC §9.3).
+
+    Errors:
+        * ``404 JOB_NOT_FOUND`` — unknown UUID.
+        * ``404 PACKAGE_NOT_READY`` — job is not COMPLETED yet, or the ZIP
+          file is missing on disk (e.g. cleanup ran).
+    """
+    from pathlib import Path
+
+    normalized = _validate_job_id(job_id)
+    try:
+        job = Job.objects.get(id=normalized)
+    except Job.DoesNotExist as exc:
+        raise JobNotFound(job_id=job_id) from exc
+
+    if job.status != JobStatus.COMPLETED or not job.package_path:
+        raise PackageNotReady(status=job.status)
+
+    abs_path = Path(job.package_path)
+    if not abs_path.is_absolute():
+        abs_path = Path(settings.MEDIA_ROOT) / abs_path
+    if not abs_path.exists():
+        # The Job row says completed but the file vanished — surface the
+        # same 404 so the frontend can display a recoverable error
+        # ("re-run packaging") instead of a 500.
+        logger.error(
+            "package_file_missing",
+            extra={"job_id": str(job.id), "package_path": job.package_path},
+        )
+        raise PackageNotReady(status=job.status)
+
+    response = StreamingHttpResponse(
+        _stream_file(abs_path),
+        content_type="application/zip",
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="{abs_path.name}"'
+    )
+    response["Content-Length"] = str(abs_path.stat().st_size)
+    response["Cache-Control"] = "no-store"
+    return response

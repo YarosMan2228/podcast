@@ -269,6 +269,22 @@ def ingest_job(job_id: str) -> None:
     a Celery app.
     """
     job = Job.objects.get(id=job_id)
+
+    # URL-sourced jobs reach the worker with no local file yet — the view
+    # only persists the URL and dispatches the task. Pull the audio with
+    # yt-dlp now, then continue down the same normalize/probe path as a
+    # file upload.
+    if not job.raw_media_path and job.source_type == SourceType.URL and job.source_url:
+        from pipeline.url_ingestion import download_from_url
+
+        dest_dir = Path(settings.MEDIA_ROOT) / "uploads" / str(job.id)
+        downloaded = download_from_url(job.source_url, dest_dir)
+        Job.objects.filter(id=job.id).update(
+            raw_media_path=str(downloaded),
+            original_filename=downloaded.name,
+        )
+        job.raw_media_path = str(downloaded)
+
     if not job.raw_media_path:
         raise IngestionError(
             "INGESTION_NO_SOURCE",

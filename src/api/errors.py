@@ -123,6 +123,73 @@ class ArtifactNotFound(ApiError):
         super().__init__(message=msg, field="artifact_id")
 
 
+class UrlInvalid(ApiError):
+    """``POST /api/jobs/from_url`` — body missing or non-http(s) URL."""
+
+    status_code = 400
+    default_code = "URL_INVALID"
+    default_message = "URL is missing or not a valid http(s) URL."
+
+    def __init__(self, url: str | None = None) -> None:
+        msg = (
+            f"URL {url!r} is not a valid http(s) URL."
+            if url
+            else self.default_message
+        )
+        super().__init__(message=msg, field="url")
+
+
+class UrlUnsupportedHost(ApiError):
+    """``POST /api/jobs/from_url`` — host outside the YouTube whitelist (SPEC §2.4)."""
+
+    status_code = 400
+    default_code = "URL_UNSUPPORTED_HOST"
+    default_message = "URL host is not supported."
+
+    def __init__(self, host: str | None = None) -> None:
+        msg = (
+            f"Host {host!r} is not in the YouTube-only MVP whitelist."
+            if host
+            else self.default_message
+        )
+        super().__init__(message=msg, field="url")
+
+
+class UrlYtdlpFailed(ApiError):
+    """``POST /api/jobs/from_url`` — yt-dlp returned an error (SPEC §2.5).
+
+    Raised synchronously from the view when probing the URL fails before a
+    Job is created. Long-running download failures inside the Celery task
+    surface via ``IngestionError`` and the FAILED transition instead.
+    """
+
+    status_code = 422
+    default_code = "URL_YTDLP_FAILED"
+    default_message = "yt-dlp failed to extract media from URL."
+
+    def __init__(self, detail: str | None = None) -> None:
+        msg = (
+            f"yt-dlp failed: {detail}" if detail else self.default_message
+        )
+        super().__init__(message=msg, field="url")
+
+
+class PackageNotReady(ApiError):
+    """``GET /api/jobs/:id/download`` — job is not in COMPLETED state yet."""
+
+    status_code = 404
+    default_code = "PACKAGE_NOT_READY"
+    default_message = "Package is not ready yet."
+
+    def __init__(self, status: str | None = None) -> None:
+        msg = (
+            f"Package is not ready (job status: {status})."
+            if status
+            else self.default_message
+        )
+        super().__init__(message=msg, field="job_id")
+
+
 class InvalidTone(ApiError):
     """``POST /api/artifacts/:id/regenerate`` — unsupported tone value."""
 

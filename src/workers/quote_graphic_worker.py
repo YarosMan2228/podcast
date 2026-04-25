@@ -70,6 +70,8 @@ def _mark_ready(
             "index": artifact.index,
         },
     )
+    from workers.tasks import check_and_trigger_packaging
+    check_and_trigger_packaging(str(artifact.job_id))
 
 
 def _mark_failed(artifact: Artifact, error_msg: str) -> None:
@@ -82,6 +84,8 @@ def _mark_failed(artifact: Artifact, error_msg: str) -> None:
         "artifact_failed",
         {"artifact_id": str(artifact.id), "error": error_msg},
     )
+    from workers.tasks import check_and_trigger_packaging
+    check_and_trigger_packaging(str(artifact.job_id))
 
 
 # ---------------------------------------------------------------------------

@@ -68,6 +68,44 @@ def transition_job_status(job_id: str, from_status: str, to_status: str) -> None
     publish(str(job_id), "status_changed", {"status": to_status})
 
 
+def check_and_trigger_packaging(job_id: str) -> bool:
+    """Enqueue ``package_job`` if every artifact is in a terminal state.
+
+    Called from each artifact worker after marking the artifact READY or
+    FAILED. SPEC §9.4: packaging fires only when no artifact is still
+    QUEUED or PROCESSING. Returns True when the dispatch happened so
+    callers (and tests) can assert the trigger fired.
+    """
+    pending_qs = Artifact.objects.filter(job_id=job_id).exclude(
+        status__in=[ArtifactStatus.READY, ArtifactStatus.FAILED]
+    )
+    if pending_qs.exists():
+        return False
+
+    # Don't re-trigger packaging for jobs that already finalised — protects
+    # against a late-arriving worker callback after the user re-ran.
+    job_status = (
+        Job.objects.filter(id=job_id).values_list("status", flat=True).first()
+    )
+    if job_status in {
+        JobStatus.PACKAGING.value,
+        JobStatus.COMPLETED.value,
+        JobStatus.FAILED.value,
+    }:
+        return False
+
+    # Deferred import — packager pulls in zipfile / settings paths the
+    # rest of the worker layer doesn't need at import time.
+    from workers.packager import package_job
+
+    package_job.apply_async(args=[str(job_id)])
+    logger.info(
+        "packaging_triggered",
+        extra={"task": "check_and_trigger_packaging", "job_id": str(job_id)},
+    )
+    return True
+
+
 def _fail_job(job_id: str, from_status: str, code: str, message: str) -> None:
     """Record a pipeline failure: persist the error, flip to FAILED, emit event.
 
@@ -241,17 +279,6 @@ def orchestrate_artifacts(self, job_id: str) -> None:
     )
     from workers.quote_graphic_worker import generate_quote_graphic
 
-    # ── Video clips ──────────────────────────────────────────────────────
-    for idx in range(clip_count):
-        artifact, _ = Artifact.objects.update_or_create(
-            job_id=job_id,
-            type=ArtifactType.VIDEO_CLIP,
-            index=idx,
-            defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
-        )
-        generate_video_clip.apply_async(args=[str(artifact.id)], queue="video")
-
-    # ── Text artifacts (SPEC §6.4) ────────────────────────────────────────
     _TEXT_ARTIFACT_TASKS = [
         (ArtifactType.LINKEDIN_POST, generate_linkedin_post),
         (ArtifactType.TWITTER_THREAD, generate_twitter_thread),
@@ -259,24 +286,55 @@ def orchestrate_artifacts(self, job_id: str) -> None:
         (ArtifactType.NEWSLETTER, generate_newsletter),
         (ArtifactType.YOUTUBE_DESCRIPTION, generate_youtube_description),
     ]
-    for artifact_type, task in _TEXT_ARTIFACT_TASKS:
-        artifact, _ = Artifact.objects.update_or_create(
+
+    # Phase 1: create *every* artifact row before dispatching any worker.
+    # Why: ``check_and_trigger_packaging`` decides "all done" by counting
+    # rows that aren't terminal. If a fast worker completes before its
+    # peers' rows exist, it sees zero pending artifacts and triggers
+    # packaging prematurely (especially under eager Celery in tests, but
+    # also possible in prod with a hot queue).
+    pending_dispatches: list[tuple[str, str, str]] = []  # (artifact_id, queue, key)
+
+    for idx in range(clip_count):
+        art, _ = Artifact.objects.update_or_create(
+            job_id=job_id,
+            type=ArtifactType.VIDEO_CLIP,
+            index=idx,
+            defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
+        )
+        pending_dispatches.append((str(art.id), "video", ArtifactType.VIDEO_CLIP))
+
+    for artifact_type, _task in _TEXT_ARTIFACT_TASKS:
+        art, _ = Artifact.objects.update_or_create(
             job_id=job_id,
             type=artifact_type,
             index=0,
             defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
         )
-        task.apply_async(args=[str(artifact.id)], queue="text_artifacts")
+        pending_dispatches.append((str(art.id), "text_artifacts", artifact_type))
 
-    # ── Quote graphics (SPEC §7.3) ────────────────────────────────────────
     for idx in range(NUM_QUOTE_GRAPHICS):
-        artifact, _ = Artifact.objects.update_or_create(
+        art, _ = Artifact.objects.update_or_create(
             job_id=job_id,
             type=ArtifactType.QUOTE_GRAPHIC,
             index=idx,
             defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
         )
-        generate_quote_graphic.apply_async(args=[str(artifact.id)], queue="graphics")
+        pending_dispatches.append(
+            (str(art.id), "graphics", ArtifactType.QUOTE_GRAPHIC)
+        )
+
+    # Phase 2: dispatch workers. By the time any one of these can flip an
+    # artifact to READY, every other artifact is already a QUEUED row in
+    # the DB.
+    text_task_by_type = {t: task for t, task in _TEXT_ARTIFACT_TASKS}
+    for artifact_id, queue, type_key in pending_dispatches:
+        if type_key == ArtifactType.VIDEO_CLIP:
+            generate_video_clip.apply_async(args=[artifact_id], queue=queue)
+        elif type_key == ArtifactType.QUOTE_GRAPHIC:
+            generate_quote_graphic.apply_async(args=[artifact_id], queue=queue)
+        else:
+            text_task_by_type[type_key].apply_async(args=[artifact_id], queue=queue)
 
     logger.info(
         "task_completed",
