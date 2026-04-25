@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+# Pinned to bookworm because Playwright's `--with-deps chromium` script still
+# references Debian packages (ttf-ubuntu-font-family, ttf-unifont) that were
+# removed in trixie. The unpinned `python:3.12-slim` tag now points at trixie
+# so the build breaks. Re-evaluate when Playwright updates its deps list.
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

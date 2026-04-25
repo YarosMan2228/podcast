@@ -264,9 +264,13 @@ def job_events(request: Request, job_id: str) -> StreamingHttpResponse:
     )
     # EventSource cache invariants + nginx buffering defeat. Proxies that
     # chunk-buffer the body will delay events by seconds otherwise.
+    #
+    # NOTE: don't set "Connection: keep-alive" — it's a hop-by-hop header
+    # that WSGI (PEP 3333) forbids the application from emitting; Django's
+    # runserver crashes on the assert with HTTP 500. Persistent connections
+    # are the default for SSE under both runserver and gunicorn anyway.
     response["Cache-Control"] = "no-cache"
     response["X-Accel-Buffering"] = "no"
-    response["Connection"] = "keep-alive"
     return response
 
 

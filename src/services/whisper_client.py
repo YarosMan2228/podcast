@@ -80,11 +80,28 @@ def _retryable_exceptions() -> tuple[type[BaseException], ...]:
 
 
 def _permanent_exceptions() -> tuple[type[BaseException], ...]:
+    """4xx errors that won't recover on retry — bail immediately.
+
+    `AuthenticationError` (401), `PermissionDeniedError` (403), and
+    `NotFoundError` (404) all subclass `APIStatusError` → `APIError`,
+    which means they'd otherwise fall into the retryable bucket and
+    burn 4 OpenAI calls on a misconfigured key.
+    """
     try:
-        from openai import BadRequestError  # type: ignore
+        from openai import (  # type: ignore
+            AuthenticationError,
+            BadRequestError,
+            NotFoundError,
+            PermissionDeniedError,
+        )
     except Exception:  # pragma: no cover
         return ()
-    return (BadRequestError,)
+    return (
+        BadRequestError,
+        AuthenticationError,
+        PermissionDeniedError,
+        NotFoundError,
+    )
 
 
 def _sleep(seconds: float) -> None:

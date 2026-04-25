@@ -20,4 +20,17 @@ from celery import Celery  # noqa: E402
 
 celery_app = Celery("podcastpack")
 celery_app.config_from_object("django.conf:settings", namespace="CELERY")
-celery_app.autodiscover_tasks(["workers"])
+
+# `autodiscover_tasks` only scans ``<package>/<related_name>.py`` — our
+# artifact workers live in dedicated modules (``video_clip_worker.py``
+# etc.) and would not be registered at boot. Without these explicit
+# scans the worker process boots with only ``workers/tasks.py`` known;
+# any direct dispatch of an artifact task (e.g. POST /api/artifacts/:id
+# /regenerate) would arrive as an unknown task name. ``autodiscover_tasks``
+# is lazy — it hooks `django.setup()`, so this avoids the AppRegistryNotReady
+# trap that a direct top-level ``import workers.video_clip_worker`` would hit.
+celery_app.autodiscover_tasks(["workers"], related_name="tasks")
+celery_app.autodiscover_tasks(["workers"], related_name="video_clip_worker")
+celery_app.autodiscover_tasks(["workers"], related_name="text_artifact_worker")
+celery_app.autodiscover_tasks(["workers"], related_name="quote_graphic_worker")
+celery_app.autodiscover_tasks(["workers"], related_name="packager")

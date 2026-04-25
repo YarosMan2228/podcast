@@ -1,10 +1,9 @@
 # STATUS.md — текущее состояние проекта
 
-> **Снимок: 2026-04-25**, после `0343d7a` (post-Day-6 cleanup)
-> **Backend тесты: 334 passed / 1 failed**
-> Единственный fail — `test_health.py::test_unknown_endpoint_returns_404` — Django 5.0 + Python 3.14 несовместимость в `Context.__copy__` (ошибка в Django, не в нашем коде); в Docker-образе с Python 3.12 не воспроизводится. **Игнорируем до апгрейда Django**.
->
-> **Frontend тесты: 7 файлов** под Vitest (запускаются `npm test` в `frontend/`); локально не прогонял в этой сессии — нет `node_modules`. По коду должны проходить (последний раз правились в `cc9512d`).
+> **Снимок: 2026-04-26**, после Docker smoke (Person A)
+> **Backend тесты: 332 passed / 1 failed locally / 333 passed in Docker** — единственный локальный fail `test_health::test_unknown_endpoint_returns_404` это Django+Python 3.14 несовместимость в `Context.__copy__`; в Docker-образе с Python 3.12 не воспроизводится. **Игнорируем до апгрейда Django**.
+> **Frontend тесты: 117 passed / 117** (Vitest, 7 файлов, `4.66s`).
+> **End-to-end smoke в Docker**: ✅ upload → ingestion → transcription → FAILED (правильный код `TRANSCRIPTION_INVALID_INPUT` без burning retry-budget на 401) виден через REST и SSE; Vite proxy на :5173 → backend на :8000 работает.
 
 ---
 
@@ -83,6 +82,16 @@
   - `_fail_job` + 4 FAILED-ветки `package_job`: стампят `completed_at` (раньше оставалось `null` на FAILED)
   - +4 теста, итого 24 в hardening-сюите
 
+### Docker smoke (post-Day-6 batch 2) — 5 реальных багов нашлось при первом запуске
+- `Dockerfile`: `python:3.12-slim` сейчас указывает на Debian trixie, где Playwright `--with-deps chromium` падает (`ttf-ubuntu-font-family`/`ttf-unifont` removed) → pin'нул `python:3.12-slim-bookworm`
+- `docker-compose.yml` worker `command: celery -A core ...` падал с `ModuleNotFoundError: core` — Celery boots без `manage.py`, который добавляет `src/` в `sys.path` → добавил `PYTHONPATH=/app/src` в env worker
+- `core/celery.py` `autodiscover_tasks(["workers"])` находил только `workers/tasks.py` → артефактные воркеры (video/text/quote/packager) не были зарегистрированы в worker-процессе (работало только если orchestrate запустился раньше регенерата). Добавил 4 явных `autodiscover_tasks(..., related_name="<module>")` (lazy, не требует django.setup на module-load)
+- `requirements.txt` `openai==1.30.1` крэшил при init с `httpx>=0.28` (`Client.__init__() got an unexpected keyword argument 'proxies'`) → bumped до `openai==1.55.3`
+- `services/whisper_client.py` `_permanent_exceptions` содержал только `BadRequestError` → 401 `AuthenticationError` (subclass `APIError`) попадал в `_retryable_exceptions`, ретраился 4 раза × $$ на каждом неверном ключе. Добавил `AuthenticationError`, `PermissionDeniedError`, `NotFoundError` в permanent
+- `api/views/jobs.py:job_events` ставил `Connection: keep-alive` — это hop-by-hop header, WSGI (PEP 3333) запрещает приложению его эмитить, Django runserver assert'ит и SSE возвращал 500. Удалил (keep-alive — default для streaming responses)
+- `docker-compose.yml`: app и worker имели отдельные `build:` → пересборка одного оставляла другой на старом image (потерял полчаса на этом — apgr openai в app, worker остался с 1.30.1). Объединил в общий `image: podcast-pack:latest`, worker зависит от app
+- (косметика) `docker-compose.yml`: убран obsolete `version: "3.9"` (warning на каждой команде)
+
 ---
 
 ## 2. Архитектура: 5 слоёв pipeline
@@ -149,7 +158,7 @@ orchestrate_artifacts          fan-out (3 очереди)
 
 ### Frontend (Vitest, `frontend/src/test/`)
 
-7 файлов: `App.test.jsx`, `Dropzone.test.jsx`, `JobPage.test.jsx`, `LandingPage.test.jsx`, `mocks.test.js`, `UrlInput.test.jsx`, `useJob.test.jsx`. Прогон: `cd frontend && npm test`.
+**117 passed / 117** в 4.66s. 7 файлов: `App.test.jsx`, `Dropzone.test.jsx`, `JobPage.test.jsx`, `LandingPage.test.jsx`, `mocks.test.js`, `UrlInput.test.jsx`, `useJob.test.jsx`. Прогон: `cd frontend && npm test`.
 
 ---
 
@@ -182,14 +191,27 @@ orchestrate_artifacts          fan-out (3 очереди)
 
 ---
 
-## 6. Что закрыто в post-Day-6 cleanup (`0343d7a`)
+## 6. Что закрыто в post-Day-6 cleanup
 
+### `0343d7a`
 | Тех долг | Решение |
 |---|---|
 | `docker-compose.yml` worker без `-Q` — задачи на video/text/graphics очередях висят в проде | `-Q default,video,text_artifacts,graphics` |
 | `.claude/` и `.coverage` всегда untracked | в `.gitignore` |
 | Regenerate video clip накапливает старые mp4 на диске | `_render_clip` после DB swap best-effort удаляет предыдущую версию |
 | `completed_at = null` на FAILED jobs | `_fail_job` + 4 FAILED-ветки `package_job` стампят `completed_at = djtz.now()` |
+
+### Docker smoke (uncommitted batch — будет в следующем коммите)
+| Баг | Решение |
+|---|---|
+| Build падал — Playwright `--with-deps` не находит `ttf-ubuntu-font-family`/`ttf-unifont` (Debian trixie removed) | Pin `python:3.12-slim-bookworm` |
+| Worker крэшил с `ModuleNotFoundError: core` | `PYTHONPATH=/app/src` в worker env |
+| Из 12 Celery tasks регистрировалось только 4 — `autodiscover_tasks` ищет `tasks.py`, артефактные воркеры в отдельных модулях | 4 явных `autodiscover_tasks(..., related_name="<module>")` (lazy, ждёт django.setup) |
+| `openai==1.30.1` × `httpx>=0.28` → `TypeError: 'proxies'` при init OpenAI клиента | Bumped до `openai==1.55.3` |
+| 401 `AuthenticationError` ретраился 4 раза × $$ (попадал в `_retryable_exceptions` через parent `APIError`) | Добавлены `AuthenticationError`/`PermissionDeniedError`/`NotFoundError` в `_permanent_exceptions` |
+| SSE `/api/jobs/:id/events` возвращал 500 — `Connection: keep-alive` это hop-by-hop, WSGI запрещает | Header убран (keep-alive это default для streaming responses) |
+| App+worker раздельные `build:` → апгрейд деп в одном оставлял другой на старом image | Общий `image: podcast-pack:latest`, worker `depends_on: [..., app]` |
+| Obsolete `version: "3.9"` в compose | Удалён |
 
 ---
 

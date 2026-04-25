@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16-alpine
@@ -18,7 +16,13 @@ services:
       - "6379:6379"
 
   app:
+    # Single image for both `app` and `worker` so `docker compose build app`
+    # rebuilds both — otherwise it's easy to upgrade a dependency, restart
+    # only one service, and have the two diverge silently (lost half a debug
+    # session to this on Day 6: openai pin updated in app, worker still on
+    # the old version, Whisper crashed only in the worker).
     build: .
+    image: podcast-pack:latest
     command: python manage.py runserver 0.0.0.0:8000
     environment:
       - POSTGRES_HOST=db
@@ -36,7 +40,7 @@ services:
       - redis
 
   worker:
-    build: .
+    image: podcast-pack:latest
     # -Q must list every queue our tasks dispatch to. Pipeline tasks
     # (start_job/transcribe/analyze/orchestrate/package) go to "default"
     # (settings.CELERY_TASK_DEFAULT_QUEUE); artifact workers explicitly
@@ -44,6 +48,9 @@ services:
     # "celery" and everything else sits on the broker forever.
     command: celery -A core worker --loglevel=info --concurrency=4 -Q default,video,text_artifacts,graphics
     environment:
+      # `manage.py` adds src/ to sys.path, but celery boots without it,
+      # so `-A core` can't import the celery app. Set PYTHONPATH explicitly.
+      - PYTHONPATH=/app/src
       - POSTGRES_HOST=db
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -55,6 +62,7 @@ services:
     depends_on:
       - db
       - redis
+      - app  # ensures the shared image is built before worker boots
 
 volumes:
   pgdata:

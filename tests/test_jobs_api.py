@@ -333,6 +333,9 @@ def test_sse_view_sets_required_headers(client: APIClient) -> None:
     assert res["Content-Type"].startswith("text/event-stream")
     assert res["Cache-Control"] == "no-cache"
     assert res["X-Accel-Buffering"] == "no"
-    assert res["Connection"] == "keep-alive"
+    # NB: do NOT assert Connection: keep-alive — that header is hop-by-hop
+    # under PEP 3333 and Django's runserver crashes if the app emits it.
+    # Persistent connections are the WSGI default for streaming responses.
+    assert "Connection" not in res
     # Subscription to the correct channel happened.
     fake_pubsub.subscribe.assert_called_once_with(f"job:{job.id}")
