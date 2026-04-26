@@ -1,9 +1,9 @@
 # STATUS.md — текущее состояние проекта
 
-> **Снимок: 2026-04-26**, после Docker smoke (Person A)
-> **Backend тесты: 332 passed / 1 failed locally / 333 passed in Docker** — единственный локальный fail `test_health::test_unknown_endpoint_returns_404` это Django+Python 3.14 несовместимость в `Context.__copy__`; в Docker-образе с Python 3.12 не воспроизводится. **Игнорируем до апгрейда Django**.
-> **Frontend тесты: 117 passed / 117** (Vitest, 7 файлов, `4.66s`).
-> **End-to-end smoke в Docker**: ✅ upload → ingestion → transcription → FAILED (правильный код `TRANSCRIPTION_INVALID_INPUT` без burning retry-budget на 401) виден через REST и SSE; Vite proxy на :5173 → backend на :8000 работает.
+> **Снимок: 2026-04-26**, после demo-fix батча (preflight + SSE cleanup + frontend FAILED handling)
+> **Backend тесты: 360 passed / 1 failed locally** (1 fail — известный py3.14 + Django 5.0 баг в `Context.__copy__`, в Docker не воспроизводится)
+> **Frontend тесты: 122 passed / 122** в Vitest (7 файлов).
+> **End-to-end в Docker (предыдущий снимок)**: ✅ upload → SSE стрим открывается → `: connected` → ingestion → transcription → FAILED → `event: job_failed` → стрим закрывается. Vite proxy на :5173 → backend на :8000 работает.
 
 ---
 
@@ -92,6 +92,24 @@
 - `docker-compose.yml`: app и worker имели отдельные `build:` → пересборка одного оставляла другой на старом image (потерял полчаса на этом — apgr openai в app, worker остался с 1.30.1). Объединил в общий `image: podcast-pack:latest`, worker зависит от app
 - (косметика) `docker-compose.yml`: убран obsolete `version: "3.9"` (warning на каждой команде)
 
+### Demo-fix batch — preflight + терминальный SSE + frontend FAILED card
+- `f9e4804` **preflight**: gate uploads на placeholder/пустые API ключи
+  - `services/preflight.py` — `check_api_keys(probe_network=False)` структурный (regex против place/your-key/xxx/<>/replace/todo/change-me/sk-...) + опциональный `probe_network=True` (OpenAI `models.list` + Anthropic 1-token messages, кэш 60s)
+  - Новый `ServiceNotConfigured` (503 `SERVICE_NOT_CONFIGURED`) + gate в `upload` и `from_url` views ДО создания Job
+  - Management command `python manage.py preflight [--probe]`
+  - `JobsConfig.ready()` логирует preflight на startup (skip для migrate/test/etc)
+  - +25 тестов (`test_preflight.py` + `test_upload_preflight_gating.py`)
+  - `tests/conftest.py` — autouse fixture с fake-real ключами для всей сюиты
+- `5e64f59` **SSE cleanup**: dedicated `job_failed` event при FAILED
+  - `_fail_job` теперь публикует `status_changed` (как раньше) + новый `job_failed{status, code, error}`
+  - `_sse_stream` уже закрывался на `job_failed` — теперь это реально срабатывает
+  - Убрана leak-ситуация: SSE стрим не закрывался на FAILED, держал Redis pub/sub forever
+  - +4 теста (TestFailJobEmitsTerminalEvents + TestSSEStreamClosesOnTerminalEvents)
+- `5d96cf1` **frontend FAILED handling**: stop SSE+polling, proper error card
+  - `useJob`: `TERMINAL_STATUSES = {COMPLETED, FAILED}`; `useEffect(job?.status)` закрывает EventSource + cancel polling; polling fallback тоже останавливается на терминальном статусе; `es.onerror` смотрит на `terminalRef` чтобы не показывать "Connection lost" при ожидаемом закрытии после FAILED; новый event `job_failed` → fetchJob() для подтягивания `Job.error`
+  - `JobPage` FAILED branch: красный ✕ icon, semantic `<h1 role="alert">`, `<p>` с `whitespace-pre-wrap break-words` для длинных error strings, "Try again" → `useNavigate('/')` (SPA, без full reload)
+  - +5 тестов (TestFailedBranch в `JobPage.test.jsx`): красный headline + persisted error, fallback на null, SPA navigation, нет "Connection lost", нет progressbar
+
 ---
 
 ## 2. Архитектура: 5 слоёв pipeline
@@ -151,14 +169,16 @@ orchestrate_artifacts          fan-out (3 очереди)
 | Events publisher | `test_events.py` | 4 |
 | Pipeline integration | `test_pipeline_integration.py` | 2 |
 | `run_pipeline` mgmt cmd | `test_run_pipeline_command.py` | 8 |
-| Day-6 hardening | `test_hardening_day6.py` | **24** |
-| **Итого** | | **335** |
+| Day-6 hardening | `test_hardening_day6.py` | **28** |
+| Preflight (structural + probe) | `test_preflight.py` | **17** |
+| Upload preflight gating | `test_upload_preflight_gating.py` | **8** |
+| **Итого** | | **361** |
 
 Прогон: `python -m pytest tests/` или (исключая известный py3.14 fail) `python -m pytest tests/ --ignore=tests/test_health.py`.
 
 ### Frontend (Vitest, `frontend/src/test/`)
 
-**117 passed / 117** в 4.66s. 7 файлов: `App.test.jsx`, `Dropzone.test.jsx`, `JobPage.test.jsx`, `LandingPage.test.jsx`, `mocks.test.js`, `UrlInput.test.jsx`, `useJob.test.jsx`. Прогон: `cd frontend && npm test`.
+**122 passed / 122** в ~4s. 7 файлов: `App.test.jsx`, `Dropzone.test.jsx`, `JobPage.test.jsx` (+5 новых для FAILED branch), `LandingPage.test.jsx`, `mocks.test.js`, `UrlInput.test.jsx`, `useJob.test.jsx`. Прогон: `cd frontend && npm test`.
 
 ---
 
@@ -178,7 +198,18 @@ orchestrate_artifacts          fan-out (3 очереди)
 - `status_changed` — `{status}` (любая стадия pipeline)
 - `artifact_ready` — `{artifact_id, type, index}`
 - `artifact_failed` — `{artifact_id, error}`
-- `completed` — `{package_url}`
+- `completed` — `{package_url}` (терминальный — стрим закрывается)
+- `job_failed` — `{status, code, error}` (терминальный — стрим закрывается)
+
+### Error codes (для frontend branching)
+- `SERVICE_NOT_CONFIGURED` (503) — preflight не пропустил, ключи placeholder/пусты. Frontend должен показать "Server is not configured" + дать кнопку retry без перезагрузки страницы.
+- `UPLOAD_*` (400/413) — клиентские ошибки upload (no_file, too_large, invalid_format, empty)
+- `URL_INVALID` / `URL_UNSUPPORTED_HOST` (400) — URL-валидация
+- `URL_YTDLP_FAILED` (422) — yt-dlp content error (live stream, geo-block, deleted)
+- `JOB_NOT_FOUND` / `ARTIFACT_NOT_FOUND` (404)
+- `PACKAGE_NOT_READY` (404) — download когда status != COMPLETED
+- `INVALID_TONE` (400) — regenerate с неподдерживаемым tone
+- `STORAGE_ERROR` / `STORAGE_FULL` (500) — сервер сломан, не клиент
 
 ---
 
@@ -201,7 +232,15 @@ orchestrate_artifacts          fan-out (3 очереди)
 | Regenerate video clip накапливает старые mp4 на диске | `_render_clip` после DB swap best-effort удаляет предыдущую версию |
 | `completed_at = null` на FAILED jobs | `_fail_job` + 4 FAILED-ветки `package_job` стампят `completed_at = djtz.now()` |
 
-### Docker smoke (uncommitted batch — будет в следующем коммите)
+### `f9e4804` / `5e64f59` / `5d96cf1` — Demo-fix batch
+| Симптом на демо | Решение |
+|---|---|
+| Файл загружался успешно, через 30s показывал TRANSCRIPTION_INVALID_INPUT (placeholder OPENAI_API_KEY) | preflight в upload views возвращает 503 `SERVICE_NOT_CONFIGURED` ДО создания Job |
+| После FAILED появлялся "Connection lost — polling for updates" + сёрвер держал Redis pubsub forever | `_fail_job` шлёт `job_failed` event; SSE `_sse_stream` закрывается на нём; frontend `useJob` смотрит `terminalRef` в `es.onerror` чтобы не пугать пользователя |
+| Polling крутился вечно после FAILED ("0/0 artifacts ready") | `useJob` `useEffect(job?.status)` закрывает EventSource + cancel polling на `COMPLETED`/`FAILED` |
+| "Try again with a different file" — `<a href>` с full reload | `<button onClick={() => navigate('/')}>` — SPA, без reload |
+
+### Docker smoke (`d21a0a5`) — 7 багов первого запуска
 | Баг | Решение |
 |---|---|
 | Build падал — Playwright `--with-deps` не находит `ttf-ubuntu-font-family`/`ttf-unifont` (Debian trixie removed) | Pin `python:3.12-slim-bookworm` |
@@ -235,15 +274,62 @@ orchestrate_artifacts          fan-out (3 очереди)
 
 | Что | Зачем | Куда |
 |---|---|---|
-| `OPENAI_API_KEY` | Whisper транскрипция | `.env` файл в корне |
-| `ANTHROPIC_API_KEY` | Claude analysis + все text artifacts | `.env` файл в корне |
-| `docker compose up -d db redis` | Поднять Postgres + Redis | один раз |
+| `OPENAI_API_KEY` | Whisper транскрипция (без него preflight даёт 503 на upload) | `.env` файл в корне |
+| `ANTHROPIC_API_KEY` | Claude analysis + все text artifacts (без него preflight даёт 503) | `.env` файл в корне |
+| `docker compose up -d db redis app worker` | Полный стек | один раз |
 | `docker compose run --rm app python manage.py migrate` | Применить миграции | при первом запуске |
+| `docker compose run --rm app python manage.py preflight --probe` | Проверить что ключи приняты вендорами | после правки `.env` |
 | Один реальный подкаст (mp3/mp4, 5–10 мин) | Интеграционный прогон upload → ZIP вручную | drag-and-drop на `localhost:5173` |
 
 ---
 
-## 9. Известные ограничения / технический долг (остаётся)
+## 9. Smoke-сценарии (руками после demo-fix)
+
+Поднять стек: `docker compose up -d` (если не запущен), Vite: `cd frontend && npm run dev`. Открыть `http://localhost:5173`.
+
+### Сценарий 1 — preflight ловит placeholder ключ (быстро, без файла)
+1. В `.env` оставь `OPENAI_API_KEY=sk-placeholder-replace-me`
+2. `docker compose restart app`
+3. `curl -X POST -F "file=@any.wav;type=audio/wav" http://localhost:8000/api/jobs/upload`
+**Ожидание:** HTTP 503, body `{"error": {"code": "SERVICE_NOT_CONFIGURED", "message": "OPENAI_API_KEY: ... appears to be a placeholder ..."}}`. Job в БД НЕ создан.
+
+### Сценарий 2 — преflight через CLI
+- `docker compose run --rm app python manage.py preflight`
+**Ожидание:** exit 0 если ключи валидны, exit 1 со списком если placeholder/пустые.
+- `docker compose run --rm app python manage.py preflight --probe`
+**Ожидание:** дополнительно ходит в OpenAI/Anthropic; 401 → exit 1.
+
+### Сценарий 3 — happy path с реальными ключами
+1. В `.env` поставь живые `OPENAI_API_KEY` + `ANTHROPIC_API_KEY`
+2. `docker compose restart app worker`
+3. На `http://localhost:5173` drop файл (5-10 мин mp3/mp4)
+**Ожидание:** редирект на `/jobs/<uuid>` → SSE подключился (NetworkTab → status 200, Type=eventsource) → status_changed: INGESTING / TRANSCRIBING / ANALYZING / GENERATING → artifact_ready × N → completed → "Download All (ZIP)" доступен.
+
+### Сценарий 4 — kill worker mid-processing
+1. Запусти upload (большой файл, чтобы было время)
+2. Когда status = ANALYZING или GENERATING, в другом терминале: `docker compose stop worker`
+3. Через 5-10s в UI должно появиться "Connection lost — polling for updates…"
+4. `docker compose start worker`
+**Ожидание:** SSE переподключится (банер исчезнет), artifact_ready начнут идти.
+
+### Сценарий 5 — middle-of-pipeline failure
+1. Поставь живой `OPENAI_API_KEY`, **placeholder** `ANTHROPIC_API_KEY`. Restart app+worker.
+2. Drop файл на `:5173`
+**Ожидание:** PENDING → INGESTING → TRANSCRIBING (Whisper отработает) → ANALYZING → FAILED. UI показывает красную карточку "Processing failed" с текстом ошибки Anthropic 401, кнопка "Try again". SSE стрим закрылся (NetworkTab → eventsource завершён). Polling **НЕ** запустился (нет повторных GET /api/jobs/<id> в Network tab).
+
+### Логи для диагностики
+```bash
+# Все ошибки с воркера и app:
+docker compose logs -f worker app | findstr /i "error fail traceback exception"
+# Только воркер по конкретному job_id:
+docker compose logs worker | findstr <uuid>
+# SSE-сообщения по нашим event-name:
+docker compose logs worker | findstr "status_changed job_failed artifact_ready completed"
+```
+
+---
+
+## 10. Известные ограничения / технический долг (остаётся)
 
 - **yt-dlp**: только YouTube (SPEC §2.4). Spotify/SoundCloud → `URL_UNSUPPORTED_HOST` намеренно.
 - **Packaging idempotency**: повторный `package_job` на COMPLETED — no-op (правильно). Если регенерируешь артефакт после COMPLETED — ZIP **не** пересобирается. По SPEC так задумано (regenerate отдаёт превью). Если нужно пересборку — добавить `repackage=true` параметр; пока не нужно.
@@ -255,7 +341,7 @@ orchestrate_artifacts          fan-out (3 очереди)
 
 ---
 
-## 10. Точки входа в код / документация
+## 11. Точки входа в код / документация
 
 - **`docs/PROJECT_IDEA.md`** — что строим и зачем
 - **`docs/SPEC.md`** — ground truth по контрактам (читать перед изменениями!)
