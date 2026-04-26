@@ -1,4 +1,5 @@
 import { render, screen, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import JobPage from '../pages/JobPage.jsx'
@@ -60,5 +61,78 @@ describe('JobPage — results branch (completed state)', () => {
     // At least one text section heading should be visible
     expect(screen.getByText('LinkedIn')).toBeInTheDocument()
     expect(screen.getByText('Video Clips')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FAILED branch — rendered straight from a stubbed useJob, doesn't depend on
+// the mock SSE timeline.
+// ---------------------------------------------------------------------------
+
+describe('JobPage — FAILED branch', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+  afterEach(() => {
+    vi.doUnmock('../hooks/useJob.js')
+  })
+
+  async function renderFailedJob(error) {
+    vi.doMock('../hooks/useJob.js', () => ({
+      default: () => ({
+        job: {
+          job_id: 'failed-job',
+          status: 'FAILED',
+          progress: { total_artifacts: 0, ready: 0, processing: 0, queued: 0, failed: 0 },
+          analysis: null,
+          artifacts: [],
+          package_url: null,
+          error,
+        },
+        artifacts: [],
+        isConnected: true,
+        refetch: vi.fn(),
+      }),
+    }))
+    const { default: JobPageFresh } = await import('../pages/JobPage.jsx')
+    return render(
+      <MemoryRouter initialEntries={['/jobs/x']}>
+        <Routes>
+          <Route path="/jobs/:jobId" element={<JobPageFresh />} />
+          <Route path="/" element={<div>landing</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  test('renders red "Processing failed" headline with the persisted error', async () => {
+    await renderFailedJob('TRANSCRIPTION_INVALID_INPUT: Error code: 401 - Bad key')
+    expect(screen.getByRole('alert')).toHaveTextContent('Processing failed')
+    expect(screen.getByText(/TRANSCRIPTION_INVALID_INPUT/)).toBeInTheDocument()
+    expect(screen.getByText(/Error code: 401/)).toBeInTheDocument()
+  })
+
+  test('falls back to a generic message when error is null', async () => {
+    await renderFailedJob(null)
+    expect(screen.getByText(/An unexpected error occurred/)).toBeInTheDocument()
+  })
+
+  test('"Try again" button navigates back to landing without a full reload', async () => {
+    const user = userEvent.setup()
+    await renderFailedJob('boom')
+    const btn = screen.getByRole('button', { name: /try again/i })
+    await user.click(btn)
+    // SPA navigation: the landing-route stub is now in the DOM, no document reload.
+    expect(screen.getByText('landing')).toBeInTheDocument()
+  })
+
+  test('does NOT render "Connection lost" banner on FAILED', async () => {
+    await renderFailedJob('boom')
+    expect(screen.queryByText(/Connection lost/i)).not.toBeInTheDocument()
+  })
+
+  test('does NOT render the progress bar on FAILED', async () => {
+    await renderFailedJob('boom')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 })

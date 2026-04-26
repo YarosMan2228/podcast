@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import useJob from '../hooks/useJob.js'
 import JobProgressBar from '../components/JobProgressBar.jsx'
 import ArtifactCard from '../components/ArtifactCard.jsx'
@@ -36,6 +36,7 @@ function groupByType(artifacts) {
 
 export default function JobPage() {
   const { jobId } = useParams()
+  const navigate = useNavigate()
   const { job, artifacts, isConnected, refetch } = useJob(jobId)
 
   async function handleRegenerate(artifact, tone) {
@@ -62,12 +63,28 @@ export default function JobPage() {
 
   if (job.status === 'FAILED') {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
-        <p className="text-red-600 font-semibold text-lg" role="alert">Processing failed</p>
-        <p className="text-gray-500 text-sm max-w-md">{job.error ?? 'An unexpected error occurred.'}</p>
-        <a href="/" className="text-indigo-600 hover:underline text-sm">
-          Try again with a different file
-        </a>
+      <main className="min-h-screen flex flex-col items-center justify-center gap-5 px-4 text-center">
+        <div
+          className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center text-red-600 text-3xl"
+          aria-hidden="true"
+        >
+          ✕
+        </div>
+        <div>
+          <h1 className="text-red-600 font-semibold text-xl mb-2" role="alert">
+            Processing failed
+          </h1>
+          <p className="text-gray-600 text-sm max-w-lg whitespace-pre-wrap break-words">
+            {job.error ?? 'An unexpected error occurred.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
+        >
+          Try again
+        </button>
       </main>
     )
   }
