@@ -36,9 +36,13 @@ PROBE_TTL_SEC: float = 60.0
 # Placeholder fragments — case-insensitive substring match. Kept narrow on
 # purpose: real keys never contain words like "place" or angle brackets.
 _PLACEHOLDER_PATTERN = re.compile(
-    r"(place|your[-_]?key|xxx|<|>|replace|todo|example|change[-_]?me|sk-\.\.\.)",
+    r"(place|your[-_]?key|xxx|<|>|replace|todo|example|change[-_]?me|sk-\.\.\.|fake)",
     re.IGNORECASE,
 )
+
+# Recognised prefixes for the Whisper-side credential. ``sk-`` is OpenAI;
+# ``gsk_`` is Groq's free OpenAI-compatible endpoint.
+_OPENAI_KEY_PREFIXES: tuple[str, ...] = ("sk-", "gsk_")
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,17 @@ def _structural_issues() -> list[dict[str, str]]:
                     ),
                 }
             )
+            continue
+        if key_name == "OPENAI_API_KEY" and not value.startswith(_OPENAI_KEY_PREFIXES):
+            issues.append(
+                {
+                    "key": key_name,
+                    "reason": (
+                        f"{key_name} must start with 'sk-' (OpenAI) or "
+                        f"'gsk_' (Groq); got {value[:6]}…."
+                    ),
+                }
+            )
     return issues
 
 
@@ -102,7 +117,13 @@ def _probe_openai() -> str | None:
         # ``models.list`` is the cheapest authenticated call: no tokens billed,
         # no audio upload, returns immediately. 401 → bad key. Network errors
         # are *not* an issue we can blame on the key, so swallow them.
-        client = OpenAI(api_key=settings.OPENAI_API_KEY, timeout=5.0)
+        # When WHISPER_BASE_URL is set (e.g. Groq), probe *that* endpoint —
+        # otherwise a Groq key fails 401 against api.openai.com.
+        base_url = (getattr(settings, "WHISPER_BASE_URL", "") or "").strip()
+        kwargs: dict[str, Any] = {"api_key": settings.OPENAI_API_KEY, "timeout": 5.0}
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = OpenAI(**kwargs)
         client.models.list()
         return None
     except (AuthenticationError, PermissionDeniedError) as exc:
