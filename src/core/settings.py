@@ -102,6 +102,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-1")
+# Empty = OpenAI default. Set to e.g. https://api.groq.com/openai/v1 to use
+# Groq as a free drop-in replacement (its API is OpenAI-compatible).
+WHISPER_BASE_URL = os.environ.get("WHISPER_BASE_URL", "")
 
 # Redis / Celery
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
