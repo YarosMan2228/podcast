@@ -62,7 +62,11 @@ def _get_openai():
     """Import lazily so unit tests don't need the ``openai`` package."""
     from openai import OpenAI  # type: ignore
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY or None)
+    base_url = (getattr(settings, "WHISPER_BASE_URL", "") or "").strip()
+    kwargs: dict[str, Any] = {"api_key": settings.OPENAI_API_KEY or None}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return OpenAI(**kwargs)
 
 
 def _retryable_exceptions() -> tuple[type[BaseException], ...]:
