@@ -156,3 +156,65 @@ def test_issues_to_message_joins_with_semicolons() -> None:
 
 def test_issues_to_message_empty_returns_empty_string() -> None:
     assert preflight.issues_to_message([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Groq drop-in: gsk_ prefix is accepted alongside sk-
+# ---------------------------------------------------------------------------
+
+
+@override_settings(
+    OPENAI_API_KEY="gsk_validlooking_aaaaaaaaaaaaaaaa",
+    ANTHROPIC_API_KEY="sk-ant-real-aaaa",
+    WHISPER_BASE_URL="https://api.groq.com/openai/v1",
+)
+def test_gsk_prefix_passes_when_groq_base_url_set() -> None:
+    """A real-looking Groq key paired with the Groq base URL must pass
+    structural preflight — that is the whole point of the drop-in."""
+    assert preflight.check_api_keys() == []
+
+
+@override_settings(
+    OPENAI_API_KEY="sk-validlooking-aaaaaaaaaaaaaaaa",
+    ANTHROPIC_API_KEY="sk-ant-real-aaaa",
+    WHISPER_BASE_URL="",
+)
+def test_sk_prefix_passes_with_empty_base_url() -> None:
+    """The OpenAI default path (empty base URL) keeps working unchanged."""
+    assert preflight.check_api_keys() == []
+
+
+@pytest.mark.parametrize(
+    "key,base_url",
+    [
+        ("gsk_placeholder_replace_me", "https://api.groq.com/openai/v1"),
+        ("gsk_placeholder_replace_me", ""),
+        ("sk-fake", ""),
+        ("sk-fake", "https://api.groq.com/openai/v1"),
+    ],
+)
+def test_placeholder_caught_regardless_of_base_url(key: str, base_url: str) -> None:
+    """Placeholders must be flagged whether or not WHISPER_BASE_URL is set —
+    misconfigured Groq doesn't get a free pass."""
+    with override_settings(
+        OPENAI_API_KEY=key,
+        ANTHROPIC_API_KEY="sk-ant-real-aaaa",
+        WHISPER_BASE_URL=base_url,
+    ):
+        issues = preflight.check_api_keys()
+    assert len(issues) == 1
+    assert issues[0]["key"] == "OPENAI_API_KEY"
+
+
+@override_settings(
+    OPENAI_API_KEY="random-garbage-no-prefix",
+    ANTHROPIC_API_KEY="sk-ant-real-aaaa",
+    WHISPER_BASE_URL="",
+)
+def test_unknown_prefix_is_rejected() -> None:
+    """Neither sk- nor gsk_ → flagged so Groq users don't paste OpenRouter
+    keys by accident and discover via 401 mid-pipeline."""
+    issues = preflight.check_api_keys()
+    assert len(issues) == 1
+    assert issues[0]["key"] == "OPENAI_API_KEY"
+    assert "sk-" in issues[0]["reason"] and "gsk_" in issues[0]["reason"]

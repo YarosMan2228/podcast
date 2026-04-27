@@ -151,3 +151,32 @@ def test_transcribe_uses_exponential_backoff(tmp_audio):
     # Two retries → backoff 1s, 2s (base 1s * 2^(attempt-1)).
     slept.assert_any_call(wc.BACKOFF_BASE_SEC)
     slept.assert_any_call(wc.BACKOFF_BASE_SEC * 2)
+
+
+# ---------- WHISPER_BASE_URL plumbing (Groq drop-in) ----------
+
+
+@pytest.mark.parametrize(
+    "base_url,expect_in_kwargs",
+    [
+        ("", False),
+        ("https://api.groq.com/openai/v1", True),
+    ],
+)
+def test_get_openai_passes_base_url_only_when_set(
+    settings, base_url: str, expect_in_kwargs: bool
+):
+    """Empty WHISPER_BASE_URL → OpenAI default (no kwarg);
+    non-empty → forwarded to the SDK so Groq is used."""
+    settings.WHISPER_BASE_URL = base_url
+    settings.OPENAI_API_KEY = "sk-test-fake"
+
+    fake_openai_cls = MagicMock()
+    with patch.dict("sys.modules", {"openai": MagicMock(OpenAI=fake_openai_cls)}):
+        wc._get_openai()
+
+    kwargs = fake_openai_cls.call_args.kwargs
+    if expect_in_kwargs:
+        assert kwargs.get("base_url") == base_url
+    else:
+        assert "base_url" not in kwargs
