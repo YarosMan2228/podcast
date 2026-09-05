@@ -4,6 +4,7 @@ from api.views import health, jobs, upload
 
 urlpatterns = [
     path("health", health.health, name="health"),
+    path("jobs", jobs.list_jobs, name="jobs_list"),
     path("jobs/upload", upload.upload, name="jobs_upload"),
     path("jobs/from_url", upload.from_url, name="jobs_from_url"),
     path("jobs/<str:job_id>", jobs.get_job, name="jobs_detail"),

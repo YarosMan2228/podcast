@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import Dropzone from '../components/Dropzone.jsx'
 import UrlInput from '../components/UrlInput.jsx'
 import { uploadFile, submitUrl } from '../api/client.js'
@@ -62,6 +62,15 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
+      <nav className="px-4 py-3 flex justify-end max-w-5xl mx-auto w-full" aria-label="Primary">
+        <Link
+          to="/history"
+          className="text-sm font-medium text-gray-500 hover:text-indigo-600"
+        >
+          Your episodes →
+        </Link>
+      </nav>
+
       {/* Hero */}
       <main>
         <section

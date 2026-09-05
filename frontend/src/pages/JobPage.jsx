@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import useJob from '../hooks/useJob.js'
 import JobProgressBar from '../components/JobProgressBar.jsx'
 import ArtifactCard from '../components/ArtifactCard.jsx'
@@ -101,6 +101,9 @@ export default function JobPage() {
       <header className="bg-white border-b border-gray-100 sticky top-0 z-10 px-4 py-3 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-start justify-between gap-3 flex-wrap">
           <div className="min-w-0 flex-1">
+            <Link to="/history" className="text-xs text-gray-400 hover:text-indigo-600">
+              ← All episodes
+            </Link>
             {job.analysis?.episode_title ? (
               <h1 className="text-base sm:text-lg font-bold text-gray-900 truncate">
                 {job.analysis.episode_title}

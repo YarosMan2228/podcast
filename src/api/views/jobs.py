@@ -182,15 +182,41 @@ def _validate_job_id(job_id: str) -> str:
         raise JobNotFound(job_id=job_id) from exc
 
 
-@api_view(["GET"])
+@api_view(["GET", "DELETE"])
 def get_job(request: Request, job_id: str) -> Response:
-    """Return SPEC §9.3 job payload. 404 ``JOB_NOT_FOUND`` on unknown id."""
+    """``GET`` → SPEC §9.3 job payload. ``DELETE`` → remove job + files (Pro).
+
+    404 ``JOB_NOT_FOUND`` on unknown id for both methods. Delete answers
+    ``{"deleted": true, "job_id": ..., "removed_dirs": n, "removed_files": n}``
+    so the history page can toast what happened.
+    """
     normalized = _validate_job_id(job_id)
     try:
         job = Job.objects.select_related("analysis").get(id=normalized)
     except Job.DoesNotExist as exc:
         raise JobNotFound(job_id=job_id) from exc
+
+    if request.method == "DELETE":
+        from services.jobs_service import delete_job
+
+        counters = delete_job(job)
+        return Response({"deleted": True, "job_id": normalized, **counters})
+
     return Response(_serialize_job(job))
+
+
+@api_view(["GET"])
+def list_jobs(request: Request) -> Response:
+    """``GET /api/jobs?limit=50`` → newest-first job summaries (Pro history)."""
+    from services.jobs_service import DEFAULT_LIST_LIMIT, list_recent_jobs, summarize_job
+
+    raw_limit = request.query_params.get("limit")
+    try:
+        limit = int(raw_limit) if raw_limit else DEFAULT_LIST_LIMIT
+    except ValueError:
+        limit = DEFAULT_LIST_LIMIT
+    jobs = list_recent_jobs(limit)
+    return Response({"jobs": [summarize_job(j) for j in jobs]})
 
 
 # ---------------------------------------------------------------------------

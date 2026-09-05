@@ -48,6 +48,26 @@ export async function submitUrl(url) {
 }
 
 /**
+ * List recent jobs (newest first) for the history page.
+ * @param {number} limit
+ * @returns {Promise<{jobs: object[]}>}
+ */
+export async function listJobs(limit = 50) {
+  const res = await fetch(`/api/jobs?limit=${limit}`)
+  return handleResponse(res)
+}
+
+/**
+ * Delete a job and every file it produced.
+ * @param {string} jobId
+ * @returns {Promise<{deleted: boolean, job_id: string}>}
+ */
+export async function deleteJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' })
+  return handleResponse(res)
+}
+
+/**
  * Regenerate an artifact, optionally with a tone override.
  * @param {string} artifactId
  * @param {string|null} tone
