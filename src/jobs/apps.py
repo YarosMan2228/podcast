@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 from django.apps import AppConfig
 
@@ -18,7 +19,7 @@ class JobsConfig(AppConfig):
         # local dev environment without keys doesn't get noisy.
         if os.environ.get("PODCAST_PACK_SKIP_PREFLIGHT") == "1":
             return
-        argv1 = (os.sys.argv[1] if len(os.sys.argv) > 1 else "").lower()
+        argv1 = (sys.argv[1] if len(sys.argv) > 1 else "").lower()
         if argv1 in {
             "migrate",
             "makemigrations",

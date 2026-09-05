@@ -19,7 +19,7 @@ export default function UrlInput({ onSubmit }) {
     const val = url.trim()
     if (!val) return
     if (!isValidHttpUrl(val)) {
-      setError('Please enter a valid URL (YouTube, Spotify, SoundCloud)')
+      setError('Please enter a valid YouTube URL (Spotify/SoundCloud coming later)')
       return
     }
     setError('')

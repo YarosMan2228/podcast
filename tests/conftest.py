@@ -25,3 +25,14 @@ def _fake_api_keys(settings):
     # The structural check looks for placeholder substrings; "fixture" is not
     # in the blacklist so these pass.
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    """The regenerate rate limiter keeps counters in Django's cache —
+    reset it so one test's requests don't 429 the next."""
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+    cache.clear()

@@ -233,9 +233,13 @@ def test_regenerate_picks_next_unused_candidate(tmp_path: Path) -> None:
     and increments ``version`` so the output filename doesn't collide."""
     job = _make_full_job(tmp_path)
     artifact = _make_artifact(job, index=0)
-    # Simulate initial render already done with candidate 0 used.
+    # Simulate initial render already done with candidate 0 used, and the
+    # regenerate endpoint having bumped ``version`` to 2 before dispatch —
+    # the worker must NOT bump again (that produced v3 on disk vs v2 in
+    # the API response).
     artifact.metadata_json = {"used_candidate_indices": [0]}
-    artifact.status = ArtifactStatus.READY
+    artifact.status = ArtifactStatus.QUEUED
+    artifact.version = 2
     artifact.save()
 
     with override_settings(
@@ -249,7 +253,7 @@ def test_regenerate_picks_next_unused_candidate(tmp_path: Path) -> None:
 
     artifact.refresh_from_db()
     assert artifact.status == ArtifactStatus.READY
-    assert artifact.version == 2  # bumped
+    assert artifact.version == 2  # set by the endpoint; worker leaves it alone
     assert artifact.metadata_json["source_clip_candidate_index"] == 1
     assert set(artifact.metadata_json["used_candidate_indices"]) == {0, 1}
     assert artifact.file_path.endswith("clip_0_v2.mp4")

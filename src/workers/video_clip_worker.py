@@ -364,12 +364,13 @@ def generate_video_clip(self, artifact_id: str, regenerate: bool = False) -> Non
         )
         return
 
-    # Flip status (and bump version on regen) in one UPDATE so a second
-    # kick against an in-flight artifact won't double-render.
-    new_version = artifact.version + 1 if regenerate else artifact.version
+    # Flip status to PROCESSING. ``version`` is NOT touched here: the
+    # regenerate endpoint (``api.views.jobs.regenerate_artifact``) already
+    # bumped it and returned that number to the client — bumping again
+    # produced N+2 on disk vs N+1 in the API response (STATUS §10 tech debt),
+    # and a transient-ffmpeg ``self.retry`` would have bumped a third time.
     Artifact.objects.filter(id=artifact.id).update(
         status=ArtifactStatus.PROCESSING,
-        version=new_version,
         error=None,
     )
     artifact.refresh_from_db()
@@ -414,6 +415,22 @@ def generate_video_clip(self, artifact_id: str, regenerate: bool = False) -> Non
     except ValueError as exc:
         _mark_failed(
             str(artifact.id), str(artifact.job_id), "CLIP_INVALID_INPUT", str(exc)
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all
+        # Anything not modelled above (missing Job row, OSError writing the
+        # temp .ass, a malformed candidate dict → KeyError, ...) used to
+        # escape the task and leave the artifact in PROCESSING forever,
+        # which blocks ``check_and_trigger_packaging`` for the whole job.
+        logger.exception(
+            "video_clip_unexpected_error",
+            extra={"artifact_id": str(artifact.id), "job_id": str(artifact.job_id)},
+        )
+        _mark_failed(
+            str(artifact.id),
+            str(artifact.job_id),
+            "CLIP_INTERNAL_ERROR",
+            f"{type(exc).__name__}: {exc}",
         )
         return
 

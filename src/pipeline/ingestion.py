@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -70,6 +71,52 @@ def is_accepted_mime(mime: str | None) -> bool:
     return any(mime.startswith(prefix) for prefix in ACCEPTED_MIME_PREFIXES)
 
 
+def resolve_upload_mime(content_type: str | None, filename: str | None) -> str | None:
+    """Pick the media MIME for an upload, or ``None`` if it's not media.
+
+    Browsers (Windows especially) send ``application/octet-stream`` or an
+    empty type for perfectly good ``.m4a`` / ``.mkv`` / ``.opus`` files.
+    SPEC §2.5 says format is decided by content, not by the label — the
+    real sniff is ffmpeg at ingestion — so here we only need to avoid
+    rejecting media on a bogus header: fall back to the extension when the
+    declared type isn't one we accept.
+    """
+    if is_accepted_mime(content_type):
+        return content_type
+    ext = Path(filename or "").suffix.lower().lstrip(".")
+    # Explicit table first — ``mimetypes`` on Windows reads the registry
+    # and frequently lacks .m4a / .opus / .mkv.
+    if ext in _EXTENSION_MIME:
+        return _EXTENSION_MIME[ext]
+    guessed, _ = mimetypes.guess_type(filename or "")
+    if is_accepted_mime(guessed):
+        return guessed
+    return None
+
+
+_EXTENSION_MIME: dict[str, str] = {
+    "mp3": "audio/mpeg",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "wav": "audio/wav",
+    "flac": "audio/flac",
+    "ogg": "audio/ogg",
+    "oga": "audio/ogg",
+    "opus": "audio/opus",
+    "weba": "audio/webm",
+    "mp4": "video/mp4",
+    "m4v": "video/mp4",
+    "mov": "video/quicktime",
+    "mkv": "video/x-matroska",
+    "webm": "video/webm",
+    "avi": "video/x-msvideo",
+    "wmv": "video/x-ms-wmv",
+    "mpeg": "video/mpeg",
+    "mpg": "video/mpeg",
+    "3gp": "video/3gpp",
+}
+
+
 def _safe_basename(original: str | None) -> str:
     """Strip path components so a malicious ``original_filename`` of
     ``"../../etc/shadow"`` can't escape the upload directory.
@@ -87,12 +134,13 @@ def _write_chunks(dest: Path, chunks: Iterable[bytes]) -> int:
     return written
 
 
-def save_upload(upload: UploadedFile) -> Job:
+def save_upload(upload: UploadedFile, *, mime_type: str | None = None) -> Job:
     """Persist *upload* to ``MEDIA_ROOT/uploads/<job_id>/`` and create a Job.
 
     The caller (view) is responsible for having validated the file's mime,
     size, and non-emptiness — this function only translates IO failures
-    into ``StorageError`` for the envelope.
+    into ``StorageError`` for the envelope. ``mime_type`` overrides the
+    browser-declared ``upload.content_type`` (see ``resolve_upload_mime``).
     """
     job_id = uuid.uuid4()
     upload_dir = Path(settings.MEDIA_ROOT) / "uploads" / str(job_id)
@@ -121,7 +169,7 @@ def save_upload(upload: UploadedFile) -> Job:
             original_filename=safe_name,
             raw_media_path=str(dest),
             file_size_bytes=written,
-            mime_type=upload.content_type or None,
+            mime_type=mime_type or upload.content_type or None,
         )
     return job
 

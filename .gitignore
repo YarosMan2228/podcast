@@ -17,8 +17,11 @@ staticfiles/
 .coverage
 htmlcov/
 
-# Claude Code per-project session state
-.claude/
+# Claude Code per-machine state. The shared config (.claude/rules,
+# .claude/agents, .claude/skills) IS versioned — CLAUDE.md and the code
+# docstrings reference it.
+.claude/settings.json
+.claude/settings.local.json
 
 # Node
 node_modules/

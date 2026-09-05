@@ -8,7 +8,7 @@ const HOW_IT_WORKS = [
   {
     step: '1',
     title: 'Upload your episode',
-    body: 'Drop an MP3/MP4 file or paste a YouTube link. Up to 500 MB, any length.',
+    body: 'Drop an MP3/MP4 file or paste a YouTube link. Up to 500 MB and 3 hours.',
   },
   {
     step: '2',

@@ -1,6 +1,6 @@
 # Podcast → Full Content Pack
 
-Загружаешь один аудио/видео-файл подкаста (или ссылку на YouTube/Spotify) — получаешь на выходе пакет готового контента для публикации на 5+ платформ: вертикальные клипы, LinkedIn-пост, Twitter-тред, show notes, newsletter, квоут-графику, YouTube-описание с таймкодами.
+Загружаешь один аудио/видео-файл подкаста (или ссылку на YouTube; Spotify/SoundCloud — после MVP) — получаешь на выходе пакет готового контента для публикации на 5+ платформ: вертикальные клипы, LinkedIn-пост, Twitter-тред, show notes, newsletter, квоут-графику, YouTube-описание с таймкодами.
 
 **Хакатон-MVP**: 7 дней, 2 разработчика, демо на ~3 минуты от загрузки до результата.
 
@@ -9,13 +9,17 @@
 ```bash
 git clone <repo>
 cd podcast-pack
-cp .env.example .env  # заполни ключи API
-docker compose up -d  # поднимет postgres + redis + app
-python manage.py migrate
-python manage.py runserver
-# отдельный терминал:
-celery -A core worker --loglevel=info --concurrency=4
+cp .env.example .env  # заполни OPENAI_API_KEY и ANTHROPIC_API_KEY
+docker compose up -d  # postgres + redis + app (миграции применяются сами) + celery worker
+# Frontend (Vite dev-server, проксирует /api и /media на :8000):
+cd frontend && npm install && npm run dev
+# → http://localhost:5173
 ```
+
+Проверить ключи до первой загрузки: `docker compose run --rm app python manage.py preflight --probe`.
+
+Без Docker нужны локальные ffmpeg/ffprobe, Postgres и Redis:
+`python manage.py migrate && python manage.py runserver` + `celery -A core worker -Q default,video,text_artifacts,graphics` (с `PYTHONPATH=src`).
 
 ## Документация проекта
 

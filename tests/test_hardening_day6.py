@@ -481,7 +481,10 @@ class TestVideoClipRegenerateCleanup:
         old_file = old_dir / "clip_0_v1.mp4"
         old_file.write_bytes(b"\x00" * 8192)
         artifact.file_path = f"artifacts/{job.id}/clip_0_v1.mp4"
-        artifact.status = ArtifactStatus.READY
+        # The regenerate endpoint bumps ``version`` + resets to QUEUED
+        # before dispatching the worker; mirror that here.
+        artifact.status = ArtifactStatus.QUEUED
+        artifact.version = 2
         artifact.metadata_json = {"used_candidate_indices": [0]}
         artifact.save()
 

@@ -25,17 +25,26 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import time
 import uuid
 from typing import Any, Iterator
 
 import redis
 from django.conf import settings
+from django.core.cache import cache
 from django.http import StreamingHttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from api.errors import ArtifactNotFound, InvalidTone, JobNotFound, PackageNotReady
+from api.errors import (
+    ArtifactNotFound,
+    InvalidTone,
+    JobNotFound,
+    PackageNotReady,
+    RegenerateRateLimited,
+)
 from jobs.models import Artifact, ArtifactStatus, ArtifactType, Job, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -64,7 +73,9 @@ def _artifact_file_url(artifact: Artifact) -> str | None:
     media_url = settings.MEDIA_URL or "/media/"
     if not media_url.endswith("/"):
         media_url += "/"
-    return media_url + artifact.file_path.lstrip("/")
+    # Workers may persist OS-native separators on a Windows dev box;
+    # URLs must always use forward slashes.
+    return media_url + artifact.file_path.replace("\\", "/").lstrip("/")
 
 
 def _serialize_artifact(artifact: Artifact) -> dict[str, Any]:
@@ -258,8 +269,20 @@ def job_events(request: Request, job_id: str) -> StreamingHttpResponse:
     pubsub = client.pubsub()
     pubsub.subscribe(f"job:{normalized}")
 
+    def _stream_and_release() -> Iterator[bytes]:
+        # ``_sse_stream`` unsubscribes + closes the pubsub in its finally;
+        # we additionally release the per-request connection pool so a
+        # long-lived tab churn doesn't leak sockets to Redis.
+        try:
+            yield from _sse_stream(normalized, pubsub)
+        finally:
+            try:
+                client.close()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                logger.debug("sse_client_close_failed", exc_info=True)
+
     response = StreamingHttpResponse(
-        _sse_stream(normalized, pubsub),
+        _stream_and_release(),
         content_type="text/event-stream",
     )
     # EventSource cache invariants + nginx buffering defeat. Proxies that
@@ -336,6 +359,32 @@ def _dispatch_worker(artifact: Artifact, tone: str | None) -> None:
         )
 
 
+_RATE_LIMIT_WINDOW_SEC = 60
+
+
+def _enforce_regenerate_rate_limit(artifact_id: str) -> None:
+    """SPEC §6.5: at most N regenerations per artifact per minute → 429.
+
+    Sliding window over the last 60s kept in Django's cache (Redis in
+    prod, LocMem in tests). Not strictly atomic — two racing requests can
+    both squeeze in — which is fine for a per-user UI guard whose purpose
+    is stopping a double-click from burning five Claude calls.
+    """
+    limit = int(getattr(settings, "REGENERATE_LIMIT_PER_MINUTE", 3) or 0)
+    if limit <= 0:
+        return
+    key = f"regen_rl:{artifact_id}"
+    now = time.time()
+    stamps = [t for t in (cache.get(key) or []) if now - t < _RATE_LIMIT_WINDOW_SEC]
+    if len(stamps) >= limit:
+        retry_after = _RATE_LIMIT_WINDOW_SEC - (now - min(stamps))
+        raise RegenerateRateLimited(
+            retry_after_sec=math.ceil(retry_after), limit=limit
+        )
+    stamps.append(now)
+    cache.set(key, stamps, timeout=_RATE_LIMIT_WINDOW_SEC)
+
+
 @api_view(["POST"])
 def regenerate_artifact(request: Request, artifact_id: str) -> Response:
     """Increment artifact version, reset to QUEUED, dispatch worker.
@@ -345,6 +394,11 @@ def regenerate_artifact(request: Request, artifact_id: str) -> Response:
 
     Returns 202:
         ``{"artifact_id": "...", "status": "QUEUED", "version": 2}``
+
+    Errors:
+        * ``404 ARTIFACT_NOT_FOUND``
+        * ``400 INVALID_TONE``
+        * ``429 REGENERATE_RATE_LIMITED`` (+ ``Retry-After``) — SPEC §6.5
     """
     try:
         normalized_id = str(uuid.UUID(artifact_id))
@@ -363,6 +417,8 @@ def regenerate_artifact(request: Request, artifact_id: str) -> Response:
             if raw_tone not in _VALID_TONES:
                 raise InvalidTone(raw_tone, set(_VALID_TONES))
             tone = raw_tone
+
+    _enforce_regenerate_rate_limit(str(artifact.id))
 
     new_version = artifact.version + 1
     Artifact.objects.filter(id=artifact.id).update(

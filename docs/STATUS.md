@@ -1,9 +1,37 @@
 # STATUS.md — текущее состояние проекта
 
-> **Снимок: 2026-04-26**, после demo-fix батча (preflight + SSE cleanup + frontend FAILED handling)
-> **Backend тесты: 360 passed / 1 failed locally** (1 fail — известный py3.14 + Django 5.0 баг в `Context.__copy__`, в Docker не воспроизводится)
-> **Frontend тесты: 122 passed / 122** в Vitest (7 файлов).
+> **Снимок: 2026-09-05**, после review-батча (см. §0)
+> **Backend тесты: 398 passed** на py3.12 (`.venv`); на py3.14 один известный fail в `test_health` — баг Django 5.0 + py3.14, не наш.
+> **Frontend тесты: 124 passed / 124** в Vitest (8 файлов), `eslint src` — чисто.
 > **End-to-end в Docker (предыдущий снимок)**: ✅ upload → SSE стрим открывается → `: connected` → ingestion → transcription → FAILED → `event: job_failed` → стрим закрывается. Vite proxy на :5173 → backend на :8000 работает.
+
+---
+
+## 0. Review-батч (2026-09-05) — что было сломано и что починено
+
+Полный аудит кода против `docs/SPEC.md` + `DIVISION_OF_WORK.md`. Все тесты были зелёные, но часть SPEC не была реализована, а несколько багов не покрывались тестами.
+
+| # | Проблема | Решение |
+|---|---|---|
+| 1 | **`/media/` не раздавался Django.** `core/urls.py` содержал только `api/`. Все `file_url` (превью видео/PNG) и `package_url` (ZIP) отдавали 404 — на демо ни одно превью не открылось бы. | `re_path(^media/...)` → `django.views.static.serve` из `MEDIA_ROOT` (без nginx в MVP, не гейтится на DEBUG). Кнопка "Download All" во фронте теперь ходит на `/api/jobs/:id/download` (Content-Disposition + структурный 404). |
+| 2 | **Двойной bump `version` при regenerate видео** (view +1, воркер +1 → v3 на диске при v2 в ответе API; transient-retry ffmpeg делал +1 ещё раз). | Воркер больше не трогает `version` — источник истины endpoint. |
+| 3 | **Зависание Job на неожиданных исключениях.** Pipeline-таски ловили только типизированные ошибки + `SoftTimeLimitExceeded`; `Job.DoesNotExist`, ошибка БД, `KeyError` в данных → таск падал, Job навсегда в INGESTING/TRANSCRIBING/ANALYZING/GENERATING, UI крутится. То же в video worker → артефакт вечно PROCESSING, packaging не стартует. | `except Exception` → `_fail_job_from_unexpected` (`INGESTION_ERROR` / `TRANSCRIPTION_ERROR` / `ANALYSIS_ERROR` / `ORCHESTRATE_ERROR` + drain QUEUED артефактов); video worker → `CLIP_INTERNAL_ERROR`. |
+| 4 | **Retry-политика text/quote воркеров.** Любое исключение → `self.retry()` с дефолтным countdown Celery **180 с** × 3 = ~9 минут до FAILED, включая заведомо постоянные ошибки (401 Anthropic, нет eligible цитат, битый JSON). | `is_permanent_error()` (ClaudeError non-transient, DoesNotExist, ValueError/KeyError/TypeError/AttributeError) → FAILED сразу; transient → backoff 1/2/4 с (rules/celery-tasks.md §6). |
+| 5 | **Rate limit на regenerate (SPEC §6.5)** отсутствовал. | 3 запроса / артефакт / минуту → `429 REGENERATE_RATE_LIMITED` + `Retry-After`. Хранится в Django cache (Redis в проде, LocMem в тестах; `REGENERATE_LIMIT_PER_MINUTE=0` выключает). |
+| 6 | **Regenerate на COMPLETED job — ZIP не пересобирался**, "Download All" отдавал старую версию. | `check_and_trigger_packaging` на COMPLETED диспатчит `package_job(repackage=True)`: пересборка ZIP без смены статуса, swap `package_path`, удаление старого архива, новый `completed` event. |
+| 7 | **Фронт после regenerate на COMPLETED job не обновлялся** — SSE закрыт, polling остановлен (терминальный статус), карточка "processing" висела до F5. | `useJob`: пока на терминальном job есть QUEUED/PROCESSING артефакты — polling каждые 3 с, останавливается сам. + тесты `useJob.real.test.jsx` (real-режим хука с fake fetch/EventSource). |
+| 8 | **Quote graphics: всегда 5 слотов** → при <5 eligible цитат дубликаты PNG (modulo), при 0 — пять FAILED. SPEC §7.4: "рендерим сколько есть". | Оркестратор создаёт `min(5, len(eligible))` слотов. |
+| 9 | **`.claude/rules`, `.claude/agents`, `.claude/skills` были удалены** в коммите `3957e62` (Day 3 Person B), потом `.claude/` попал в `.gitignore`. CLAUDE.md, README и docstrings (`celery-tasks.md §6`, `ffmpeg-usage.md §3`…) ссылались на несуществующие файлы. | Восстановлены из `3957e62^`; `.gitignore` теперь игнорирует только `.claude/settings*.json`. |
+| 10 | **Upload отклонял `application/octet-stream`** (Windows-браузеры так шлют `.m4a`/`.mkv`/`.opus`). SPEC §2.5: формат по содержимому, не по заголовку. | `resolve_upload_mime()` — fallback по расширению (явная таблица + `mimetypes`). |
+| 11 | **Тесты писали ZIP-ы в `media/packages/` репозитория** (180 файлов накопилось). | `tests/settings_test.py`: `MEDIA_ROOT` → temp dir. Мусор удалён. |
+| 12 | **Нет `.dockerignore`** — `COPY . .` тащил в образ `.venv`, `node_modules`, `media/` и **реальный `.env`**. | Добавлен. |
+| 13 | `docker compose up` требовал ручного `migrate`. | `app` command: `migrate --noinput && runserver`. |
+| 14 | ESLint error в `useJob.js` (запись в ref во время рендера, `react-hooks/refs`). | `terminalRef` обновляется в `useEffect`. |
+| 15 | Мелочи: `_split_tweet_at_limit` резал только один раз (хвост >270); backslash в `file_path` на Windows → битые URL; SSE не закрывал redis-клиент; `UrlInput` обещал Spotify/SoundCloud; "any length" на лендинге при лимите 180 мин. | Исправлено. |
+
+Новые тесты: `tests/test_review_fixes.py` (25) + `frontend/src/test/useJob.real.test.jsx` (2). Изменены 2 существующих (regenerate-тесты воркера теперь эмулируют bump версии endpoint-ом).
+
+**Не сделано (осознанно):** Day-7 пункты требуют реальных ключей/железа — прогон 3–5 реальных подкастов, load-test 3 параллельных upload, pre-cached demo job, видео-демо и pitch deck. SPEC §4.4 шаг 3 (retry "be more generous" при <5 клипов с score ≥6) не реализован — SPEC §4.5 одновременно говорит "берём top-5 даже с низким скором"; оставлен pydantic-минимум 2 кандидата.
 
 ---
 

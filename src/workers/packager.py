@@ -266,9 +266,19 @@ def _safe_transition(job_id: str, to_status: str) -> bool:
     time_limit=330,
     acks_late=True,
 )
-def package_job(self, job_id: str) -> None:
-    """Assemble the ZIP and finalize the Job (SPEC §8.2)."""
-    logger.info("task_started", extra={"task": "package_job", "job_id": job_id})
+def package_job(self, job_id: str, repackage: bool = False) -> None:
+    """Assemble the ZIP and finalize the Job (SPEC §8.2).
+
+    ``repackage=True`` rebuilds the ZIP for a job that is already
+    ``COMPLETED`` (an artifact was regenerated afterwards). No status
+    transitions happen in that mode — only the file and
+    ``Job.package_path`` are swapped, and a fresh ``completed`` event
+    carries the new ``package_url``.
+    """
+    logger.info(
+        "task_started",
+        extra={"task": "package_job", "job_id": job_id, "repackage": repackage},
+    )
 
     try:
         job = Job.objects.get(id=job_id)
@@ -276,6 +286,17 @@ def package_job(self, job_id: str) -> None:
         logger.warning(
             "package_job_unknown_job_id", extra={"job_id": str(job_id)}
         )
+        return
+
+    if repackage:
+        if job.status != JobStatus.COMPLETED:
+            # Regular packaging (or a FAILED job) — nothing to rebuild.
+            logger.info(
+                "package_job_repackage_skipped",
+                extra={"job_id": str(job_id), "status": job.status},
+            )
+            return
+        _repackage_completed_job(job)
         return
 
     # Idempotency: re-firing on a finalized job is fine (see §9.5).
@@ -310,13 +331,7 @@ def package_job(self, job_id: str) -> None:
         return
 
     analysis = Analysis.objects.filter(job_id=job_id).first()
-
-    # ZIP location: MEDIA_ROOT/packages/podcast_pack_<short>_<ts>.zip — the
-    # short id keeps the filename grep-friendly without leaking the full uuid.
-    short_id = str(job.id).split("-")[0]
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    rel_zip = Path("packages") / f"podcast_pack_{short_id}_{timestamp}.zip"
-    abs_zip = Path(settings.MEDIA_ROOT) / rel_zip
+    rel_zip, abs_zip = _new_zip_location(job)
 
     try:
         included, skipped = _build_zip(job, analysis, artifacts, abs_zip)
@@ -350,21 +365,16 @@ def package_job(self, job_id: str) -> None:
         return
 
     Job.objects.filter(id=job_id).update(
-        package_path=str(rel_zip),
+        package_path=rel_zip.as_posix(),
         completed_at=djtz.now(),
     )
     if not _safe_transition(job_id, JobStatus.COMPLETED):
         return
 
-    media_url = settings.MEDIA_URL or "/media/"
-    if not media_url.endswith("/"):
-        media_url += "/"
-    package_url = media_url + str(rel_zip).replace("\\", "/")
-
     publish(
         str(job_id),
         "completed",
-        {"package_url": package_url},
+        {"package_url": _package_url(rel_zip)},
     )
 
     logger.info(
@@ -374,6 +384,85 @@ def package_job(self, job_id: str) -> None:
             "job_id": str(job_id),
             "included": included,
             "skipped": skipped,
-            "package_path": str(rel_zip),
+            "package_path": rel_zip.as_posix(),
+        },
+    )
+
+
+def _package_url(rel_zip: Path) -> str:
+    media_url = settings.MEDIA_URL or "/media/"
+    if not media_url.endswith("/"):
+        media_url += "/"
+    return media_url + rel_zip.as_posix()
+
+
+def _new_zip_location(job: Job) -> tuple[Path, Path]:
+    """``(relative, absolute)`` path for a fresh package ZIP.
+
+    ``MEDIA_ROOT/packages/podcast_pack_<short>_<ts>.zip`` — the short id
+    keeps the filename grep-friendly without leaking the full uuid; the
+    timestamp makes every (re)package a new file so browsers never serve a
+    cached stale archive.
+    """
+    short_id = str(job.id).split("-")[0]
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    rel_zip = Path("packages") / f"podcast_pack_{short_id}_{timestamp}.zip"
+    return rel_zip, Path(settings.MEDIA_ROOT) / rel_zip
+
+
+def _repackage_completed_job(job: Job) -> None:
+    """Rebuild the ZIP for a COMPLETED job after an artifact regenerate.
+
+    Best-effort: on any IO failure the previous package stays in place and
+    the job remains COMPLETED — a stale download beats a broken one.
+    """
+    artifacts = list(Artifact.objects.filter(job_id=job.id).order_by("type", "index"))
+    if not any(a.status == ArtifactStatus.READY for a in artifacts):
+        logger.warning(
+            "repackage_skipped_nothing_ready", extra={"job_id": str(job.id)}
+        )
+        return
+
+    analysis = Analysis.objects.filter(job_id=job.id).first()
+    rel_zip, abs_zip = _new_zip_location(job)
+    try:
+        included, skipped = _build_zip(job, analysis, artifacts, abs_zip)
+    except (OSError, zipfile.BadZipFile, SoftTimeLimitExceeded):
+        logger.exception("repackage_zip_failed", extra={"job_id": str(job.id)})
+        try:
+            if abs_zip.exists():
+                abs_zip.unlink()
+        except OSError:
+            pass
+        return
+
+    previous = job.package_path
+    Job.objects.filter(id=job.id).update(package_path=rel_zip.as_posix())
+
+    # Drop the superseded archive so regenerate-happy sessions don't pile
+    # up ZIPs on disk. Only after the DB points at the new one.
+    if previous and previous != rel_zip.as_posix():
+        prev_abs = Path(previous)
+        if not prev_abs.is_absolute():
+            prev_abs = Path(settings.MEDIA_ROOT) / prev_abs
+        try:
+            if prev_abs.exists():
+                prev_abs.unlink()
+        except OSError as exc:
+            logger.warning(
+                "repackage_previous_cleanup_failed",
+                extra={"job_id": str(job.id), "path": previous, "error": str(exc)},
+            )
+
+    publish(str(job.id), "completed", {"package_url": _package_url(rel_zip)})
+    logger.info(
+        "task_completed",
+        extra={
+            "task": "package_job",
+            "job_id": str(job.id),
+            "repackage": True,
+            "included": included,
+            "skipped": skipped,
+            "package_path": rel_zip.as_posix(),
         },
     )

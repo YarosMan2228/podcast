@@ -113,7 +113,10 @@ export default function JobPage() {
 
           {isCompleted && job.package_url && (
             <a
-              href={job.package_url}
+              // The API endpoint (not the raw /media URL) — it sets
+              // Content-Disposition: attachment and answers 404
+              // PACKAGE_NOT_READY instead of a bare static 404.
+              href={`/api/jobs/${job.job_id ?? jobId}/download`}
               download
               aria-label="Download all artifacts as ZIP"
               className="shrink-0 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"

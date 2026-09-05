@@ -23,7 +23,9 @@ services:
     # the old version, Whisper crashed only in the worker).
     build: .
     image: podcast-pack:latest
-    command: python manage.py runserver 0.0.0.0:8000
+    # Apply migrations on every boot so a fresh clone works with a single
+    # `docker compose up` (idempotent — no-op when nothing is pending).
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
     environment:
       - POSTGRES_HOST=db
       - REDIS_URL=redis://redis:6379/0

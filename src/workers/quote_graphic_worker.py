@@ -144,7 +144,8 @@ def generate_quote_graphic(self, artifact_id: str) -> None:
         render_quote_to_png(quote_text, speaker, output_path, template_id=template_id)
 
         # Store path relative to MEDIA_ROOT for URL assembly in the API.
-        rel_path = str(output_path.relative_to(Path(settings.MEDIA_ROOT)))
+        # Forward slashes always — this string becomes a URL segment.
+        rel_path = output_path.relative_to(Path(settings.MEDIA_ROOT)).as_posix()
 
         metadata: dict[str, Any] = {
             "quote_text": quote_text,
@@ -176,8 +177,18 @@ def generate_quote_graphic(self, artifact_id: str) -> None:
             "task_failed",
             extra={"task": "generate_quote_graphic", "artifact_id": artifact_id},
         )
-        is_final = self.request.retries >= self.max_retries
-        if is_final and artifact is not None:
-            _mark_failed(artifact, str(exc))
+        # Same policy as the text workers: permanent errors (no eligible
+        # quotes, missing analysis row) fail immediately; transient ones
+        # (Playwright launch flake) retry with a 1/2/4s backoff.
+        from workers.text_artifact_worker import is_permanent_error, retry_countdown_sec
+
+        is_final = (
+            self.request.retries >= self.max_retries or is_permanent_error(exc)
+        )
+        if is_final:
+            if artifact is not None:
+                _mark_failed(artifact, str(exc))
             return
-        raise self.retry(exc=exc)
+        raise self.retry(
+            exc=exc, countdown=retry_countdown_sec(self.request.retries)
+        )

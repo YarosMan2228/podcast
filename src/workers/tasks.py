@@ -84,21 +84,28 @@ def check_and_trigger_packaging(job_id: str) -> bool:
     if pending_qs.exists():
         return False
 
-    # Don't re-trigger packaging for jobs that already finalised — protects
-    # against a late-arriving worker callback after the user re-ran.
     job_status = (
         Job.objects.filter(id=job_id).values_list("status", flat=True).first()
     )
-    if job_status in {
-        JobStatus.PACKAGING.value,
-        JobStatus.COMPLETED.value,
-        JobStatus.FAILED.value,
-    }:
+    # Packaging already in flight, or the job died — nothing to do.
+    if job_status in {JobStatus.PACKAGING.value, JobStatus.FAILED.value}:
         return False
 
     # Deferred import — packager pulls in zipfile / settings paths the
     # rest of the worker layer doesn't need at import time.
     from workers.packager import package_job
+
+    # Regenerate on an already-COMPLETED job: every artifact is terminal
+    # again, so rebuild the ZIP in place (SPEC §8 — "Download All" must
+    # reflect what the user sees on screen). ``repackage=True`` tells the
+    # packager to skip the status transitions and just swap the file.
+    if job_status == JobStatus.COMPLETED.value:
+        package_job.apply_async(args=[str(job_id)], kwargs={"repackage": True})
+        logger.info(
+            "repackaging_triggered",
+            extra={"task": "check_and_trigger_packaging", "job_id": str(job_id)},
+        )
+        return True
 
     package_job.apply_async(args=[str(job_id)])
     logger.info(
@@ -106,6 +113,32 @@ def check_and_trigger_packaging(job_id: str) -> bool:
         extra={"task": "check_and_trigger_packaging", "job_id": str(job_id)},
     )
     return True
+
+
+def _fail_job_from_unexpected(
+    job_id: str, from_status: str, code: str, exc: BaseException
+) -> None:
+    """Terminal handler for *unexpected* exceptions inside a pipeline task.
+
+    Pipeline modules raise typed errors (``IngestionError`` etc.) for the
+    failures SPEC enumerates; anything else (DB hiccup, missing row, a bug)
+    used to propagate out of the task and leave the Job parked in
+    INGESTING/TRANSCRIBING/... forever with the UI spinning (SPEC §9.5).
+    We log the traceback and move the job to FAILED so the user sees a
+    terminal state. If the job already left ``from_status`` (e.g. it was
+    failed by a parallel path) the transition is skipped, not raised.
+    """
+    logger.exception(
+        "pipeline_unexpected_error",
+        extra={"job_id": job_id, "from_status": from_status, "code": code},
+    )
+    try:
+        _fail_job(job_id, from_status, code, f"{type(exc).__name__}: {exc}")
+    except InvalidTransition as transition_exc:
+        logger.warning(
+            "pipeline_unexpected_error_transition_skipped",
+            extra={"job_id": job_id, "error": str(transition_exc)},
+        )
 
 
 def _fail_job(job_id: str, from_status: str, code: str, message: str) -> None:
@@ -181,6 +214,9 @@ def start_job(self, job_id: str) -> None:
             f"soft_time_limit ({start_job.soft_time_limit}s) exceeded",
         )
         return
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all, see helper
+        _fail_job_from_unexpected(job_id, JobStatus.INGESTING, "INGESTION_ERROR", exc)
+        return
 
     # .claude/rules/celery-tasks.md §7: dispatch the next stage only after
     # the ingestion updates are committed (ingest_job's UPDATE is outside a
@@ -220,6 +256,11 @@ def transcribe_job_task(self, job_id: str) -> None:
             f"soft_time_limit ({transcribe_job_task.soft_time_limit}s) exceeded",
         )
         return
+    except Exception as exc:  # noqa: BLE001
+        _fail_job_from_unexpected(
+            job_id, JobStatus.TRANSCRIBING, "TRANSCRIPTION_ERROR", exc
+        )
+        return
 
     analyze_job_task.apply_async(args=[job_id])
     logger.info("task_completed", extra={"task": "transcribe_job", "job_id": job_id})
@@ -254,6 +295,9 @@ def analyze_job_task(self, job_id: str) -> None:
             "ANALYSIS_TIMEOUT",
             f"soft_time_limit ({analyze_job_task.soft_time_limit}s) exceeded",
         )
+        return
+    except Exception as exc:  # noqa: BLE001
+        _fail_job_from_unexpected(job_id, JobStatus.ANALYZING, "ANALYSIS_ERROR", exc)
         return
 
     # SPEC §9.4: analyze → orchestrate_artifacts fan-out.
@@ -292,11 +336,8 @@ def orchestrate_artifacts(self, job_id: str) -> None:
         # Mid fan-out timeout. Some artifact rows may already exist as
         # QUEUED — those would block forever (no worker dispatched). Mark
         # them FAILED so packaging fires on the partial set.
-        Artifact.objects.filter(
-            job_id=job_id, status=ArtifactStatus.QUEUED
-        ).update(
-            status=ArtifactStatus.FAILED,
-            error="ORCHESTRATE_TIMEOUT: soft_time_limit exceeded before dispatch",
+        _drain_queued_artifacts(
+            job_id, "ORCHESTRATE_TIMEOUT: soft_time_limit exceeded before dispatch"
         )
         _fail_job(
             job_id,
@@ -305,6 +346,22 @@ def orchestrate_artifacts(self, job_id: str) -> None:
             f"soft_time_limit ({orchestrate_artifacts.soft_time_limit}s) "
             "exceeded during fan-out",
         )
+    except Exception as exc:  # noqa: BLE001
+        # Same shape as the timeout branch: a broker outage mid-dispatch
+        # leaves QUEUED rows nobody will ever pick up.
+        _drain_queued_artifacts(
+            job_id, f"ORCHESTRATE_ERROR: {type(exc).__name__}: {exc}"
+        )
+        _fail_job_from_unexpected(
+            job_id, JobStatus.GENERATING, "ORCHESTRATE_ERROR", exc
+        )
+
+
+def _drain_queued_artifacts(job_id: str, error: str) -> None:
+    """Flip every still-QUEUED artifact of *job_id* to FAILED with *error*."""
+    Artifact.objects.filter(job_id=job_id, status=ArtifactStatus.QUEUED).update(
+        status=ArtifactStatus.FAILED, error=error
+    )
 
 
 def _orchestrate_artifacts_inner(job_id: str) -> None:
@@ -344,7 +401,21 @@ def _orchestrate_artifacts_inner(job_id: str) -> None:
         generate_twitter_thread,
         generate_youtube_description,
     )
-    from workers.quote_graphic_worker import generate_quote_graphic
+    from workers.quote_graphic_worker import (
+        generate_quote_graphic,
+        select_eligible_quotes,
+    )
+
+    # SPEC §7.4: "fewer than 5 notable_quotes → render as many as there
+    # are". Creating five slots regardless made the worker wrap around and
+    # emit duplicate PNGs (or five FAILED rows when nothing was eligible).
+    eligible_quote_count = len(select_eligible_quotes(list(analysis.quotes_json or [])))
+    quote_count = min(NUM_QUOTE_GRAPHICS, eligible_quote_count)
+    if quote_count == 0:
+        logger.warning(
+            "orchestrate_no_eligible_quotes",
+            extra={"job_id": job_id, "quotes": len(analysis.quotes_json or [])},
+        )
 
     _TEXT_ARTIFACT_TASKS = [
         (ArtifactType.LINKEDIN_POST, generate_linkedin_post),
@@ -380,7 +451,7 @@ def _orchestrate_artifacts_inner(job_id: str) -> None:
         )
         pending_dispatches.append((str(art.id), "text_artifacts", artifact_type))
 
-    for idx in range(NUM_QUOTE_GRAPHICS):
+    for idx in range(quote_count):
         art, _ = Artifact.objects.update_or_create(
             job_id=job_id,
             type=ArtifactType.QUOTE_GRAPHIC,
@@ -410,6 +481,6 @@ def _orchestrate_artifacts_inner(job_id: str) -> None:
             "job_id": job_id,
             "video_clip_count": clip_count,
             "text_artifact_count": len(_TEXT_ARTIFACT_TASKS),
-            "quote_graphic_count": NUM_QUOTE_GRAPHICS,
+            "quote_graphic_count": quote_count,
         },
     )

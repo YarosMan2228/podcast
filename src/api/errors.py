@@ -222,3 +222,25 @@ class InvalidTone(ApiError):
             message=f"Tone {tone!r} is not allowed. Valid: {sorted(valid)}.",
             field="tone",
         )
+
+
+class RegenerateRateLimited(ApiError):
+    """``POST /api/artifacts/:id/regenerate`` — SPEC §6.5 rate limit.
+
+    At most ``REGENERATE_LIMIT_PER_MINUTE`` regenerations of the same
+    artifact per minute; the response carries ``Retry-After`` (seconds).
+    """
+
+    status_code = 429
+    default_code = "REGENERATE_RATE_LIMITED"
+    default_message = "Too many regenerate requests for this artifact."
+
+    def __init__(self, retry_after_sec: int, limit: int) -> None:
+        self.headers = {"Retry-After": str(max(1, int(retry_after_sec)))}
+        super().__init__(
+            message=(
+                f"Limit is {limit} regenerations per artifact per minute. "
+                f"Retry in {max(1, int(retry_after_sec))}s."
+            ),
+            field="artifact_id",
+        )

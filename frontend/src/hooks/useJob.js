@@ -111,6 +111,8 @@ function useMockJob() {
 // events can arrive, polling has no point, and the SSE socket should be
 // closed (otherwise it stays open until the server times it out).
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'FAILED'])
+// Poll cadence while a regenerated artifact is in flight on a terminal job.
+const REGEN_POLL_MS = 3000
 
 function realReducer(state, action) {
   if (action.type === 'SET_FULL') {
@@ -137,7 +139,10 @@ function useRealJob(jobId) {
   // dep) so the effect re-runs only on jobId change, not on every status
   // update — which would tear down + reopen the SSE socket constantly.
   const terminalRef = useRef(false)
-  terminalRef.current = TERMINAL_STATUSES.has(job?.status)
+  const isTerminal = TERMINAL_STATUSES.has(job?.status)
+  useEffect(() => {
+    terminalRef.current = isTerminal
+  }, [isTerminal])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -180,6 +185,32 @@ function useRealJob(jobId) {
       closeStream()
     }
   }, [job?.status, closeStream])
+
+  // Regenerate on a COMPLETED job: the SSE socket is already closed and
+  // the fallback poller stopped, so nothing would ever pick up the new
+  // version. While any artifact is QUEUED/PROCESSING on a terminal job,
+  // poll the REST endpoint until every artifact is terminal again (that
+  // snapshot also carries the re-packaged package_url).
+  const hasPendingArtifacts = Object.values(artifactMap).some(
+    (a) => a.status === 'QUEUED' || a.status === 'PROCESSING'
+  )
+  const regenPollRef = useRef(null)
+  useEffect(() => {
+    const shouldPoll = TERMINAL_STATUSES.has(job?.status) && hasPendingArtifacts
+    if (shouldPoll && !regenPollRef.current) {
+      regenPollRef.current = setInterval(fetchJob, REGEN_POLL_MS)
+    }
+    if (!shouldPoll && regenPollRef.current) {
+      clearInterval(regenPollRef.current)
+      regenPollRef.current = null
+    }
+    return () => {
+      if (regenPollRef.current) {
+        clearInterval(regenPollRef.current)
+        regenPollRef.current = null
+      }
+    }
+  }, [job?.status, hasPendingArtifacts, fetchJob])
 
   useEffect(() => {
     if (!jobId) return
@@ -232,7 +263,6 @@ function useRealJob(jobId) {
       esRef.current = null
       stopPolling()
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, fetchJob, stopPolling])
 
   return {

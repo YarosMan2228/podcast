@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 def structured_exception_handler(exc, context):
     if isinstance(exc, ApiError):
-        return Response(exc.as_envelope(), status=exc.status_code)
+        # Some errors carry response headers (e.g. 429 → ``Retry-After``).
+        headers = getattr(exc, "headers", None) or None
+        return Response(exc.as_envelope(), status=exc.status_code, headers=headers)
 
     response = drf_default_handler(exc, context)
     if response is None:

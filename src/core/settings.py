@@ -116,6 +116,19 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_DEFAULT_QUEUE = "default"
 CELERY_TIMEZONE = "UTC"
 
+# Cache — used for the regenerate rate limit (SPEC §6.5). Redis so the
+# counter is shared between runserver/gunicorn workers; tests override to
+# LocMem (see tests/settings_test.py).
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("CACHE_REDIS_URL", REDIS_URL),
+    }
+}
+
+# SPEC §6.5 — max regenerations of one artifact per minute.
+REGENERATE_LIMIT_PER_MINUTE = _env_int("REGENERATE_LIMIT_PER_MINUTE", 3)
+
 # Feature flags
 ENABLE_DIARIZATION = _env_bool("ENABLE_DIARIZATION", False)
 ENABLE_FACE_TRACKING = _env_bool("ENABLE_FACE_TRACKING", False)

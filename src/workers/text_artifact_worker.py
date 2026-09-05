@@ -22,6 +22,7 @@ import re
 from typing import Any, Callable
 
 from celery.exceptions import SoftTimeLimitExceeded
+from django.core.exceptions import ObjectDoesNotExist
 
 from core.celery import celery_app
 from jobs.models import Artifact, ArtifactStatus
@@ -33,10 +34,36 @@ from pipeline.prompts.text_artifacts import (
     build_twitter_prompt,
     build_youtube_description_prompt,
 )
-from services.claude_client import call_text_artifact
+from services.claude_client import ClaudeError, call_text_artifact
 from services.events import publish
 
 logger = logging.getLogger(__name__)
+
+
+def is_permanent_error(exc: BaseException) -> bool:
+    """Errors that a Celery retry can't fix (rules/celery-tasks.md §6).
+
+    * ``ClaudeError(transient=False)`` — 4xx from Anthropic (bad key,
+      oversized prompt); the client already exhausted *its* retries for
+      the transient kind, so a non-transient one won't heal in 2 seconds.
+    * Missing rows / malformed data — ``ObjectDoesNotExist``, ``KeyError``,
+      ``ValueError`` (includes ``json.JSONDecodeError``), ``TypeError``,
+      ``AttributeError`` (``job.analysis`` absent).
+
+    Everything else (network blips, Playwright/IO hiccups, unknown
+    ``RuntimeError``) is worth the short backoff retry.
+    """
+    if isinstance(exc, ClaudeError):
+        return not exc.transient
+    return isinstance(
+        exc, (ObjectDoesNotExist, KeyError, ValueError, TypeError, AttributeError)
+    )
+
+
+def retry_countdown_sec(retries: int) -> int:
+    """Exponential backoff 1/2/4s (rules §6) — never Celery's 180s default,
+    which kept a doomed artifact in PROCESSING for ~9 minutes."""
+    return 2 ** max(0, int(retries))
 
 _TASK_KWARGS: dict[str, Any] = dict(
     bind=True,
@@ -133,13 +160,22 @@ def _truncate_to_word_limit(text: str, max_words: int) -> str:
 
 
 def _split_tweet_at_limit(tweet: str, limit: int = 270) -> list[str]:
-    """Split an over-limit tweet at the last space before the character limit."""
-    if len(tweet) <= limit:
-        return [tweet]
-    split_at = tweet.rfind(" ", 0, limit)
-    if split_at == -1:
-        split_at = limit
-    return [tweet[:split_at].rstrip(), tweet[split_at:].lstrip()]
+    """Split an over-limit tweet at the last space before the character limit.
+
+    Loops so a tweet that is several times over the limit yields only
+    in-limit pieces (a single split left the tail over-length).
+    """
+    parts: list[str] = []
+    rest = tweet.strip()
+    while len(rest) > limit:
+        split_at = rest.rfind(" ", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        parts.append(rest[:split_at].rstrip())
+        rest = rest[split_at:].lstrip()
+    if rest or not parts:
+        parts.append(rest)
+    return parts
 
 
 # ─────────────────────── shared task scaffold ───────────────────────
@@ -208,7 +244,12 @@ def _run_artifact_task(
             "task_failed",
             extra={"task": artifact_type_key, "artifact_id": artifact_id},
         )
-        is_final = self.request.retries >= self.max_retries
+        # Permanent errors (bad key, missing rows, malformed JSON) fail now;
+        # retrying them only delays the FAILED card in the UI. Transient
+        # ones get a short exponential backoff instead of Celery's 180s.
+        is_final = (
+            self.request.retries >= self.max_retries or is_permanent_error(exc)
+        )
         if is_final:
             if artifact is not None:
                 try:
@@ -219,7 +260,9 @@ def _run_artifact_task(
                         extra={"artifact_id": artifact_id},
                     )
             return
-        raise self.retry(exc=exc)
+        raise self.retry(
+            exc=exc, countdown=retry_countdown_sec(self.request.retries)
+        )
 
 
 # ─────────────────────────── tasks ──────────────────────────────

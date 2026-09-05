@@ -19,7 +19,7 @@ from api.errors import (
     UrlUnsupportedHost,
 )
 from jobs.models import Job, SourceType
-from pipeline.ingestion import is_accepted_mime, save_upload
+from pipeline.ingestion import resolve_upload_mime, save_upload
 from pipeline.url_ingestion import (
     UnsupportedHostError,
     UrlValidationError,
@@ -54,10 +54,11 @@ def upload(request: Request) -> Response:
         raise UploadEmptyFile()
     if uploaded.size > settings.MAX_UPLOAD_SIZE_BYTES:
         raise UploadTooLarge(limit_mb=settings.MAX_UPLOAD_SIZE_MB)
-    if not is_accepted_mime(uploaded.content_type):
+    mime = resolve_upload_mime(uploaded.content_type, uploaded.name)
+    if mime is None:
         raise UploadInvalidFormat(mime=uploaded.content_type)
 
-    job = save_upload(uploaded)
+    job = save_upload(uploaded, mime_type=mime)
     # .claude/rules/celery-tasks.md §7: only dispatch after the Job row is
     # committed. save_upload's transaction.atomic() has already exited here.
     start_job.apply_async(args=[str(job.id)])
