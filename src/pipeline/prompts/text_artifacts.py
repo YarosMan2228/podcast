@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+from pipeline.prompts.languages import output_language_instruction
+
 TONES = frozenset({"analytical", "casual", "punchy", "professional"})
 
 DEFAULT_TONES: dict[str, str] = {
@@ -49,6 +51,25 @@ def _tone_instruction(tone: str) -> str:
     return _TONE_INSTRUCTIONS.get(tone, _TONE_INSTRUCTIONS["analytical"])
 
 
+def _language_block(analysis: dict) -> str:
+    """``<language>…</language>`` when the podcast isn't in English, else ''.
+
+    The worker puts ``transcript.language`` into the analysis dict under
+    ``"language"`` so every prompt builder can read it without a
+    signature change.
+    """
+    instruction = output_language_instruction(analysis.get("language"))
+    return f"<language>{instruction}</language>\n\n" if instruction else ""
+
+
+def _hint_block(analysis: dict) -> str:
+    """Optional user instruction for a regenerate ("shorter", "more jokes")."""
+    hint = (analysis.get("regenerate_hint") or "").strip()
+    if not hint:
+        return ""
+    return f"<user_request>{hint}</user_request>\n\n"
+
+
 def _format_quotes(quotes: list, limit: int = 5) -> str:
     return json.dumps(quotes[:limit], ensure_ascii=False)
 
@@ -70,7 +91,7 @@ Key quotes: {_format_quotes(analysis.get("quotes_json") or [])}
 {guest_line}
 </analysis>
 
-<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
+{_language_block(analysis)}{_hint_block(analysis)}<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
 
 Write a LinkedIn post about this podcast episode that:
 - Opens with a hook (a question, surprising claim, or contrarian take) in the first 1-2 lines — these show before "see more" so make them count
@@ -92,7 +113,7 @@ Key quotes: {_format_quotes(analysis.get("quotes_json") or [])}
 Chapters: {_format_chapters(analysis.get("chapters_json") or [])}
 </analysis>
 
-<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
+{_language_block(analysis)}{_hint_block(analysis)}<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
 
 Write a Twitter/X thread about this podcast episode with these STRICT rules:
 - 6–10 tweets total
@@ -127,7 +148,7 @@ Key quotes: {_format_quotes(analysis.get("quotes_json") or [], limit=8)}
 {guest_data}
 </analysis>
 
-<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
+{_language_block(analysis)}{_hint_block(analysis)}<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
 
 Write show notes for this podcast episode in Markdown using this exact structure:
 
@@ -166,7 +187,7 @@ Key quotes: {_format_quotes(analysis.get("quotes_json") or [])}
 {guest_line}
 </analysis>
 
-<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
+{_language_block(analysis)}{_hint_block(analysis)}<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
 
 Write a newsletter issue about this podcast episode for Substack. Target: ~400 words.
 
@@ -211,7 +232,7 @@ Chapters (milliseconds): {_format_chapters(analysis.get("chapters_json") or [])}
 {guest_line}
 </analysis>
 
-<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
+{_language_block(analysis)}{_hint_block(analysis)}<tone_instruction>{_tone_instruction(tone)}</tone_instruction>
 
 Write a YouTube video description for this podcast episode with this structure:
 

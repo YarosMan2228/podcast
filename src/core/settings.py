@@ -105,6 +105,13 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-1")
 # Empty = OpenAI default. Set to e.g. https://api.groq.com/openai/v1 to use
 # Groq as a free drop-in replacement (its API is OpenAI-compatible).
 WHISPER_BASE_URL = os.environ.get("WHISPER_BASE_URL", "")
+# Comma-separated ISO-639-1 codes the pipeline accepts; empty = any language
+# Whisper detects (Claude is then told to write in that language).
+TRANSCRIPTION_ALLOWED_LANGUAGES = [
+    code.strip().lower()
+    for code in os.environ.get("TRANSCRIPTION_ALLOWED_LANGUAGES", "").split(",")
+    if code.strip()
+]
 
 # Redis / Celery
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")

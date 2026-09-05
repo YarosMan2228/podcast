@@ -23,6 +23,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from pipeline.prompts.languages import output_language_instruction
+
 
 # ---------------------------------------------------------------------------
 # Response schema — mirrors SPEC §1.5 EpisodeAnalysis
@@ -162,12 +164,18 @@ def _format_segments_for_prompt(segments: list[dict[str, Any]], max_segments: in
 def build_messages(
     full_text: str,
     segments: list[dict[str, Any]],
+    *,
+    language: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return ``(system_blocks, messages)`` ready for ``ClaudeClient.call``.
 
     The transcript block is cached (ephemeral, 5-min TTL) — text-artifact
     workers build their system blocks with the same cached transcript, so
     subsequent calls read at 10% cost.
+
+    ``language`` (ISO code from Whisper) makes Claude write titles, hooks,
+    themes, chapter names and reasons in the podcast's language instead of
+    silently translating everything to English.
     """
     system_blocks: list[dict[str, Any]] = [
         {"type": "text", "text": SYSTEM_INSTRUCTIONS},
@@ -188,6 +196,13 @@ def build_messages(
     ]
 
     user_content = _TASK + _SCHEMA_INLINE + "\n\nReturn ONLY the JSON object."
+    lang_instruction = output_language_instruction(language)
+    if lang_instruction:
+        user_content = (
+            f"{lang_instruction} JSON keys stay in English; only the values "
+            "are in the podcast's language. notable_quotes.text must be "
+            "verbatim from the transcript.\n\n" + user_content
+        )
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
     return system_blocks, messages
 

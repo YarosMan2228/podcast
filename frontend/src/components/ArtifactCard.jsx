@@ -1,6 +1,7 @@
 import VideoArtifact from './VideoArtifact.jsx'
 import TextArtifact from './TextArtifact.jsx'
 import GraphicArtifact from './GraphicArtifact.jsx'
+import TranscriptArtifact from './TranscriptArtifact.jsx'
 
 const TYPE_LABELS = {
   VIDEO_CLIP:          'Video Clip',
@@ -10,6 +11,7 @@ const TYPE_LABELS = {
   NEWSLETTER:          'Newsletter',
   YOUTUBE_DESCRIPTION: 'YouTube Description',
   QUOTE_GRAPHIC:       'Quote Graphic',
+  TRANSCRIPT:          'Transcript + Captions',
 }
 
 const TEXT_TYPES = new Set([
@@ -111,6 +113,9 @@ export default function ArtifactCard({ artifact, onRegenerate }) {
       )}
       {artifact.type === 'QUOTE_GRAPHIC' && (
         <GraphicArtifact artifact={artifact} onRegenerate={onRegenerate} />
+      )}
+      {artifact.type === 'TRANSCRIPT' && (
+        <TranscriptArtifact artifact={artifact} />
       )}
     </article>
   )

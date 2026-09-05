@@ -227,6 +227,23 @@ Keywords: AI startups, technical debt, ML infrastructure, founder advice, AI hyp
     version: 1,
   },
 
+  // TRANSCRIPT (Pro) — readable text + SRT/VTT side files
+  {
+    id: 'art-tr-0',
+    type: 'TRANSCRIPT',
+    index: 0,
+    status: 'READY',
+    file_url: '/media/artifacts/mock/transcript.srt',
+    files: { srt: '/media/artifacts/mock/transcript.srt', vtt: '/media/artifacts/mock/transcript.vtt' },
+    text_content: `[00:00] Welcome to the show. Today we talk about the hidden cost of AI hype with Sarah Chen, CTO at Anthropic Labs.
+
+[00:42] Sarah, you said something last week that stuck with me: you can't outrun technical debt with valuation. What did you mean?
+
+[01:05] Every cycle has the same shape. Cloud, mobile, now AI. Founders raise on a demo, and the demo becomes the architecture.`,
+    metadata: { language: 'en', word_count: 8412, segment_count: 612, duration_sec: 2712 },
+    version: 1,
+  },
+
   // QUOTE_GRAPHIC × 3
   {
     id: 'art-qg-0',
@@ -332,6 +349,7 @@ export const MOCK_SSE_SEQUENCE = [
   [6500, 'artifact_ready',  { artifact_id: 'art-sn-0',  type: 'SHOW_NOTES',           index: 0 }],
   [7000, 'artifact_ready',  { artifact_id: 'art-nl-0',  type: 'NEWSLETTER',           index: 0 }],
   [7200, 'artifact_ready',  { artifact_id: 'art-yt-0',  type: 'YOUTUBE_DESCRIPTION',  index: 0 }],
+  [7400, 'artifact_ready',  { artifact_id: 'art-tr-0',  type: 'TRANSCRIPT',           index: 0 }],
   [8000, 'artifact_ready',  { artifact_id: 'art-vid-0', type: 'VIDEO_CLIP',           index: 0 }],
   [8500, 'artifact_ready',  { artifact_id: 'art-vid-1', type: 'VIDEO_CLIP',           index: 1 }],
   [9000, 'artifact_ready',  { artifact_id: 'art-vid-2', type: 'VIDEO_CLIP',           index: 2 }],

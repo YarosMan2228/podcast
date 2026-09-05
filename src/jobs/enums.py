@@ -33,6 +33,8 @@ class ArtifactType(models.TextChoices):
     QUOTE_GRAPHIC = "QUOTE_GRAPHIC"
     EPISODE_THUMBNAIL = "EPISODE_THUMBNAIL"
     YOUTUBE_DESCRIPTION = "YOUTUBE_DESCRIPTION"
+    # Pro: full transcript as readable text + SRT/VTT caption files.
+    TRANSCRIPT = "TRANSCRIPT"
 
 
 class ArtifactStatus(models.TextChoices):

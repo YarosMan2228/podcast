@@ -78,15 +78,32 @@ def _artifact_file_url(artifact: Artifact) -> str | None:
     return media_url + artifact.file_path.replace("\\", "/").lstrip("/")
 
 
+def _media_url_for(rel_path: str | None) -> str | None:
+    if not rel_path:
+        return None
+    media_url = settings.MEDIA_URL or "/media/"
+    if not media_url.endswith("/"):
+        media_url += "/"
+    return media_url + rel_path.replace("\\", "/").lstrip("/")
+
+
 def _serialize_artifact(artifact: Artifact) -> dict[str, Any]:
+    metadata = artifact.metadata_json or {}
+    # Side files (e.g. TRANSCRIPT → {"srt": ..., "vtt": ...}) get one URL each.
+    files = {
+        label: _media_url_for(rel)
+        for label, rel in (metadata.get("files") or {}).items()
+        if rel
+    }
     return {
         "id": str(artifact.id),
         "type": artifact.type,
         "index": artifact.index,
         "status": artifact.status,
         "file_url": _artifact_file_url(artifact),
+        "files": files,
         "text_content": artifact.text_content,
-        "metadata": artifact.metadata_json or {},
+        "metadata": metadata,
         "version": artifact.version,
         "error": artifact.error,
     }
@@ -351,6 +368,11 @@ def _dispatch_worker(artifact: Artifact, tone: str | None) -> None:
         from workers.quote_graphic_worker import generate_quote_graphic
 
         generate_quote_graphic.apply_async(args=[str(artifact.id)], queue="graphics")
+
+    elif artifact.type == ArtifactType.TRANSCRIPT:
+        from workers.transcript_worker import generate_transcript
+
+        generate_transcript.apply_async(args=[str(artifact.id)], queue="text_artifacts")
 
     else:
         logger.warning(

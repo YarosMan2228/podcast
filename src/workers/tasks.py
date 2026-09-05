@@ -405,6 +405,7 @@ def _orchestrate_artifacts_inner(job_id: str) -> None:
         generate_quote_graphic,
         select_eligible_quotes,
     )
+    from workers.transcript_worker import generate_transcript
 
     # SPEC §7.4: "fewer than 5 notable_quotes → render as many as there
     # are". Creating five slots regardless made the worker wrap around and
@@ -462,6 +463,16 @@ def _orchestrate_artifacts_inner(job_id: str) -> None:
             (str(art.id), "graphics", ArtifactType.QUOTE_GRAPHIC)
         )
 
+    # Pro: full transcript + SRT/VTT. Deterministic, no LLM — lives on the
+    # text queue so it's ready seconds after fan-out.
+    art, _ = Artifact.objects.update_or_create(
+        job_id=job_id,
+        type=ArtifactType.TRANSCRIPT,
+        index=0,
+        defaults={"status": ArtifactStatus.QUEUED, "metadata_json": {}, "error": None},
+    )
+    pending_dispatches.append((str(art.id), "text_artifacts", ArtifactType.TRANSCRIPT))
+
     # Phase 2: dispatch workers. By the time any one of these can flip an
     # artifact to READY, every other artifact is already a QUEUED row in
     # the DB.
@@ -471,6 +482,8 @@ def _orchestrate_artifacts_inner(job_id: str) -> None:
             generate_video_clip.apply_async(args=[artifact_id], queue=queue)
         elif type_key == ArtifactType.QUOTE_GRAPHIC:
             generate_quote_graphic.apply_async(args=[artifact_id], queue=queue)
+        elif type_key == ArtifactType.TRANSCRIPT:
+            generate_transcript.apply_async(args=[artifact_id], queue=queue)
         else:
             text_task_by_type[type_key].apply_async(args=[artifact_id], queue=queue)
 

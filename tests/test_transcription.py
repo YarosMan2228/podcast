@@ -219,7 +219,9 @@ def test_transcribe_job_raises_on_empty_transcript(tmp_path: Path):
     assert exc.value.code == "TRANSCRIPTION_EMPTY"
 
 
-def test_transcribe_job_raises_on_unsupported_language(tmp_path: Path):
+def test_transcribe_job_raises_on_unsupported_language(tmp_path: Path, settings):
+    """With an explicit whitelist, other languages are rejected."""
+    settings.TRANSCRIPTION_ALLOWED_LANGUAGES = ["en"]
     wav = tmp_path / "normalized.wav"
     wav.write_bytes(b"\x00" * 1024)
     job = Job.objects.create(
@@ -232,6 +234,22 @@ def test_transcribe_job_raises_on_unsupported_language(tmp_path: Path):
         with pytest.raises(TranscriptionError) as exc:
             transcribe_job(str(job.id))
     assert exc.value.code == "TRANSCRIPTION_UNSUPPORTED_LANGUAGE"
+
+
+def test_transcribe_job_accepts_any_language_by_default(tmp_path: Path, settings):
+    """Pro: no whitelist → Russian / Ukrainian / ... podcasts go through."""
+    settings.TRANSCRIPTION_ALLOWED_LANGUAGES = []
+    wav = tmp_path / "normalized.wav"
+    wav.write_bytes(b"\x00" * 1024)
+    job = Job.objects.create(
+        source_type=SourceType.FILE, normalized_wav_path=str(wav), duration_sec=2.0,
+    )
+    with patch(
+        "pipeline.transcription.whisper_transcribe",
+        return_value=_result(language="uk", text="Привіт усім"),
+    ):
+        transcribe_job(str(job.id))
+    assert job.transcript.language == "uk"
 
 
 def test_transcribe_job_raises_on_likely_noise(tmp_path: Path):

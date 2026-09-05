@@ -13,6 +13,7 @@ const SECTION_ORDER = [
   'NEWSLETTER',
   'YOUTUBE_DESCRIPTION',
   'QUOTE_GRAPHIC',
+  'TRANSCRIPT',
 ]
 
 const SECTION_LABELS = {
@@ -23,6 +24,7 @@ const SECTION_LABELS = {
   NEWSLETTER:          'Newsletter',
   YOUTUBE_DESCRIPTION: 'YouTube Description',
   QUOTE_GRAPHIC:       'Quote Graphics',
+  TRANSCRIPT:          'Transcript & Captions',
 }
 
 function groupByType(artifacts) {
@@ -158,6 +160,8 @@ export default function JobPage() {
           const cols =
             type === 'VIDEO_CLIP' || type === 'QUOTE_GRAPHIC'
               ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+              : type === 'TRANSCRIPT'
+              ? 'grid-cols-1'
               : 'grid-cols-1 lg:grid-cols-2'
 
           return (

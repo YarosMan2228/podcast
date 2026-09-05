@@ -42,7 +42,16 @@ CHUNK_SEC = 600
 NOISE_MIN_SEGMENTS = 5
 NOISE_REPETITION_THRESHOLD = 0.20
 
-SUPPORTED_LANGUAGE = "en"
+
+def _allowed_languages() -> list[str]:
+    """Language whitelist from settings; empty list means "accept any".
+
+    The original MVP hard-coded English. Pro lifts that: Whisper detects
+    the language and every downstream prompt is told to write in it.
+    Operators who want to restrict (e.g. only ``en,ru,uk``) set
+    ``TRANSCRIPTION_ALLOWED_LANGUAGES``.
+    """
+    return list(getattr(settings, "TRANSCRIPTION_ALLOWED_LANGUAGES", []) or [])
 
 
 class TranscriptionError(Exception):
@@ -238,10 +247,12 @@ def transcribe_job(job_id: str) -> None:
             "Whisper returned no speech — audio is silent or unintelligible",
         )
 
-    if transcript["language"] != SUPPORTED_LANGUAGE:
+    allowed = _allowed_languages()
+    if allowed and (transcript["language"] or "").lower() not in allowed:
         raise TranscriptionError(
             "TRANSCRIPTION_UNSUPPORTED_LANGUAGE",
-            f"Detected language {transcript['language']!r}; MVP supports only English",
+            f"Detected language {transcript['language']!r}; "
+            f"this server accepts only {', '.join(allowed)}",
         )
 
     if _is_likely_noise(transcript["segments"]):

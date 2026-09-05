@@ -54,6 +54,13 @@ _ARCHIVE_LAYOUT: dict[str, tuple[str, str]] = {
     ArtifactType.YOUTUBE_DESCRIPTION: ("text", "youtube_description.txt"),
     ArtifactType.QUOTE_GRAPHIC: ("graphics", "quote_{index}{ext}"),
     ArtifactType.EPISODE_THUMBNAIL: ("graphics", "thumbnail{ext}"),
+    ArtifactType.TRANSCRIPT: ("text", "transcript.txt"),
+}
+
+# Artifacts that carry additional files in ``metadata_json["files"]``
+# (``{label: relative_path}``) → the zip folder + filename template for them.
+_EXTRA_FILES_LAYOUT: dict[str, tuple[str, str]] = {
+    ArtifactType.TRANSCRIPT: ("subtitles", "transcript.{label}"),
 }
 
 
@@ -103,6 +110,7 @@ _TYPE_LABELS: dict[str, str] = {
     ArtifactType.YOUTUBE_DESCRIPTION: "YouTube description",
     ArtifactType.QUOTE_GRAPHIC: "Quote graphics",
     ArtifactType.EPISODE_THUMBNAIL: "Thumbnail",
+    ArtifactType.TRANSCRIPT: "Transcript + captions (SRT/VTT)",
 }
 
 
@@ -161,7 +169,8 @@ def render_index_txt(
     lines.append("How to use")
     lines.append("----------")
     lines.append("  clips/      — vertical 9:16 mp4, ready for TikTok / Reels / Shorts.")
-    lines.append("  text/       — markdown drafts; tweak voice and post.")
+    lines.append("  text/       — markdown drafts + transcript.txt; tweak voice and post.")
+    lines.append("  subtitles/  — transcript.srt / .vtt; upload as captions on YouTube.")
     lines.append("  graphics/   — 1080x1080 PNGs for Instagram / LinkedIn carousels.")
     lines.append("")
     return "\n".join(lines)
@@ -197,6 +206,17 @@ def _build_zip(
             if art.status != ArtifactStatus.READY:
                 skipped += 1
                 continue
+
+            # Side files (e.g. transcript.srt / .vtt next to transcript.txt).
+            extra_layout = _EXTRA_FILES_LAYOUT.get(art.type)
+            if extra_layout:
+                folder, name_tpl = extra_layout
+                for label, rel in ((art.metadata_json or {}).get("files") or {}).items():
+                    p = Path(rel)
+                    if not p.is_absolute():
+                        p = Path(settings.MEDIA_ROOT) / p
+                    if p.exists():
+                        zf.write(p, f"{folder}/{name_tpl.format(label=label)}")
 
             # Text-content artifacts (LinkedIn, Twitter, ...).
             if art.text_content:

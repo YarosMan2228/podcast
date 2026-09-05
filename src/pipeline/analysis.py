@@ -197,6 +197,7 @@ def analyze_job(job_id: str) -> None:
     system_blocks, messages = build_messages(
         full_text=transcript.full_text,
         segments=transcript.segments_json or [],
+        language=transcript.language,
     )
     parsed, input_tokens, output_tokens = _call_and_validate(
         system_blocks, messages, job_id=job_id

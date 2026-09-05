@@ -29,6 +29,8 @@ const ARTIFACT_PILLS = [
   'Show notes',
   'Newsletter',
   'Quote graphics',
+  'Transcript + SRT/VTT',
+  'Any language',
 ]
 
 export default function LandingPage() {

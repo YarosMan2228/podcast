@@ -92,6 +92,10 @@ def _load_context(artifact_id: str) -> tuple[Artifact, dict, str]:
         "chapters_json": analysis.chapters_json,
         "clip_candidates_json": analysis.clip_candidates_json,
         "quotes_json": analysis.quotes_json,
+        # Pro: prompts write in the podcast's language (see prompts.languages).
+        "language": transcript.language,
+        # Pro: free-text instruction from the regenerate dialog, if any.
+        "regenerate_hint": (artifact.metadata_json or {}).get("regenerate_hint"),
     }
     return artifact, analysis_dict, transcript.full_text
 
