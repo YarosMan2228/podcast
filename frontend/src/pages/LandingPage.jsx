@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import Dropzone from '../components/Dropzone.jsx'
 import UrlInput from '../components/UrlInput.jsx'
+import BrandingSettings from '../components/BrandingSettings.jsx'
+import { loadStoredBranding } from '../api/branding.js'
 import { uploadFile, submitUrl } from '../api/client.js'
 
 const HOW_IT_WORKS = [
@@ -37,12 +39,13 @@ export default function LandingPage() {
   const navigate = useNavigate()
   const [uploadError, setUploadError] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [options, setOptions] = useState(() => ({ ...loadStoredBranding(), logo: null }))
 
   async function handleFile(file) {
     setUploadError('')
     setUploading(true)
     try {
-      const { job_id } = await uploadFile(file)
+      const { job_id } = await uploadFile(file, options)
       navigate(`/jobs/${job_id}`)
     } catch (err) {
       setUploadError(err.message ?? 'Upload failed. Please try again.')
@@ -53,7 +56,7 @@ export default function LandingPage() {
   async function handleUrl(url) {
     setUploadError('')
     try {
-      const { job_id } = await submitUrl(url)
+      const { job_id } = await submitUrl(url, options)
       navigate(`/jobs/${job_id}`)
     } catch (err) {
       setUploadError(err.message ?? 'Could not start job from URL.')
@@ -149,6 +152,8 @@ export default function LandingPage() {
           </div>
 
           <UrlInput onSubmit={handleUrl} />
+
+          <BrandingSettings value={options} onChange={setOptions} />
         </section>
 
         {/* How it works */}

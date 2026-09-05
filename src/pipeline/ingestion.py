@@ -23,9 +23,12 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from django.conf import settings
+
+if TYPE_CHECKING:  # pragma: no cover
+    from pipeline.branding import Branding
 from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 
@@ -134,22 +137,34 @@ def _write_chunks(dest: Path, chunks: Iterable[bytes]) -> int:
     return written
 
 
-def save_upload(upload: UploadedFile, *, mime_type: str | None = None) -> Job:
+def save_upload(
+    upload: UploadedFile,
+    *,
+    mime_type: str | None = None,
+    branding: "Branding | None" = None,
+) -> Job:
     """Persist *upload* to ``MEDIA_ROOT/uploads/<job_id>/`` and create a Job.
 
     The caller (view) is responsible for having validated the file's mime,
     size, and non-emptiness — this function only translates IO failures
     into ``StorageError`` for the envelope. ``mime_type`` overrides the
     browser-declared ``upload.content_type`` (see ``resolve_upload_mime``).
+    ``branding`` (Pro) stores podcast name / colour and writes the logo
+    next to the upload.
     """
+    from pipeline.branding import store_logo
+
     job_id = uuid.uuid4()
     upload_dir = Path(settings.MEDIA_ROOT) / "uploads" / str(job_id)
     safe_name = _safe_basename(upload.name)
     dest = upload_dir / safe_name
 
+    logo_rel: str | None = None
     try:
         upload_dir.mkdir(parents=True, exist_ok=True)
         written = _write_chunks(dest, upload.chunks())
+        if branding is not None and branding.logo is not None:
+            logo_rel = store_logo(str(job_id), branding.logo)
     except OSError as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
         raise StorageError(message=f"Failed to persist upload: {exc}") from exc
@@ -170,6 +185,9 @@ def save_upload(upload: UploadedFile, *, mime_type: str | None = None) -> Job:
             raw_media_path=str(dest),
             file_size_bytes=written,
             mime_type=mime_type or upload.content_type or None,
+            podcast_name=branding.podcast_name if branding else None,
+            brand_color=branding.brand_color if branding else "#6366f1",
+            logo_path=logo_rel,
         )
     return job
 

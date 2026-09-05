@@ -11,6 +11,7 @@ const TYPE_LABELS = {
   NEWSLETTER:          'Newsletter',
   YOUTUBE_DESCRIPTION: 'YouTube Description',
   QUOTE_GRAPHIC:       'Quote Graphic',
+  EPISODE_THUMBNAIL:   'Episode Thumbnail',
   TRANSCRIPT:          'Transcript + Captions',
 }
 
@@ -111,7 +112,7 @@ export default function ArtifactCard({ artifact, onRegenerate }) {
       {TEXT_TYPES.has(artifact.type) && (
         <TextArtifact artifact={artifact} onRegenerate={onRegenerate} />
       )}
-      {artifact.type === 'QUOTE_GRAPHIC' && (
+      {(artifact.type === 'QUOTE_GRAPHIC' || artifact.type === 'EPISODE_THUMBNAIL') && (
         <GraphicArtifact artifact={artifact} onRegenerate={onRegenerate} />
       )}
       {artifact.type === 'TRANSCRIPT' && (

@@ -161,6 +161,11 @@ def _serialize_job(job: Job) -> dict[str, Any]:
         "analysis": analysis_block,
         "artifacts": [_serialize_artifact(a) for a in artifacts],
         "package_url": _package_url_for(job),
+        "branding": {
+            "podcast_name": job.podcast_name,
+            "brand_color": job.brand_color,
+            "logo_url": _media_url_for(job.logo_path),
+        },
         "error": job.error,
     }
 
@@ -399,6 +404,11 @@ def _dispatch_worker(artifact: Artifact, tone: str | None) -> None:
         from workers.transcript_worker import generate_transcript
 
         generate_transcript.apply_async(args=[str(artifact.id)], queue="text_artifacts")
+
+    elif artifact.type == ArtifactType.EPISODE_THUMBNAIL:
+        from workers.thumbnail_worker import generate_thumbnail
+
+        generate_thumbnail.apply_async(args=[str(artifact.id)], queue="graphics")
 
     else:
         logger.warning(

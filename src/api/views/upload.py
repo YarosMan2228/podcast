@@ -1,11 +1,10 @@
-"""POST /api/jobs/upload + POST /api/jobs/from_url — SPEC §2.3."""
+"""POST /api/jobs/upload + POST /api/jobs/from_url — SPEC §2.3 (+ Pro branding)."""
 from __future__ import annotations
 
 from django.conf import settings
-from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
-from rest_framework.parsers import JSONParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -18,13 +17,14 @@ from api.errors import (
     UrlInvalid,
     UrlUnsupportedHost,
 )
-from jobs.models import Job, SourceType
+from pipeline.branding import parse_branding
 from pipeline.ingestion import resolve_upload_mime, save_upload
 from pipeline.url_ingestion import (
     UnsupportedHostError,
     UrlValidationError,
     validate_url,
 )
+from services.jobs_service import create_url_job
 from services.preflight import check_api_keys, issues_to_message
 from workers.tasks import start_job
 
@@ -45,6 +45,8 @@ def _gate_on_preflight() -> None:
 @api_view(["POST"])
 @parser_classes([MultiPartParser])
 def upload(request: Request) -> Response:
+    """Multipart: ``file`` (required) + optional Pro fields
+    ``podcast_name``, ``brand_color`` (#RRGGBB), ``logo`` (image ≤ 2 MB)."""
     _gate_on_preflight()
 
     uploaded = request.FILES.get("file")
@@ -57,8 +59,9 @@ def upload(request: Request) -> Response:
     mime = resolve_upload_mime(uploaded.content_type, uploaded.name)
     if mime is None:
         raise UploadInvalidFormat(mime=uploaded.content_type)
+    branding = parse_branding(request.data, request.FILES)
 
-    job = save_upload(uploaded, mime_type=mime)
+    job = save_upload(uploaded, mime_type=mime, branding=branding)
     # .claude/rules/celery-tasks.md §7: only dispatch after the Job row is
     # committed. save_upload's transaction.atomic() has already exited here.
     start_job.apply_async(args=[str(job.id)])
@@ -69,31 +72,27 @@ def upload(request: Request) -> Response:
 
 
 @api_view(["POST"])
-@parser_classes([JSONParser])
+@parser_classes([JSONParser, MultiPartParser, FormParser])
 def from_url(request: Request) -> Response:
     """SPEC §2.3 — create a Job from a YouTube URL.
 
-    The view only validates the URL whitelist + persists a Job row in
-    ``PENDING``; the actual yt-dlp download happens in the Celery
-    ingestion task (``pipeline.ingestion.ingest_job``) so the HTTP
-    response stays fast and a slow download can't time out the request.
+    Accepts JSON (``{"url": ...}``) or multipart (same field + optional
+    branding incl. a ``logo`` file). The actual yt-dlp download happens in
+    the Celery ingestion task so the HTTP response stays fast.
     """
     _gate_on_preflight()
 
-    raw_url = (request.data or {}).get("url") if request.data else None
+    data = request.data or {}
+    raw_url = data.get("url") if data else None
     try:
         url = validate_url(raw_url)
     except UrlValidationError as exc:
         raise UrlInvalid(url=raw_url if isinstance(raw_url, str) else None) from exc
     except UnsupportedHostError as exc:
         raise UrlUnsupportedHost(host=exc.host) from exc
+    branding = parse_branding(data, request.FILES)
 
-    with transaction.atomic():
-        job = Job.objects.create(
-            source_type=SourceType.URL,
-            source_url=url,
-        )
-
+    job = create_url_job(url, branding)
     start_job.apply_async(args=[str(job.id)])
     return Response(
         {"job_id": str(job.id), "status": job.status},

@@ -23,6 +23,11 @@ class Job(djmodels.Model):
     normalized_wav_path = djmodels.TextField(null=True, blank=True)
     # SPEC §8.2 — set by ``workers.packager.package_job`` once the ZIP is on disk.
     package_path = djmodels.TextField(null=True, blank=True)
+    # Pro branding (SPEC §7.1 US-7.3 "logo once, everywhere"): shown on quote
+    # graphics + the episode thumbnail. ``logo_path`` is relative to MEDIA_ROOT.
+    podcast_name = djmodels.CharField(max_length=120, null=True, blank=True)
+    brand_color = djmodels.CharField(max_length=7, default="#6366f1")
+    logo_path = djmodels.TextField(null=True, blank=True)
     duration_sec = djmodels.FloatField(null=True, blank=True)
     file_size_bytes = djmodels.BigIntegerField(null=True, blank=True)
     mime_type = djmodels.CharField(max_length=64, null=True, blank=True)

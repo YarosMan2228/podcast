@@ -172,6 +172,10 @@ def test_full_pipeline_upload_to_video_clips(tmp_path: Path) -> None:
         "workers.text_artifact_worker.generate_youtube_description.apply_async"
     ), patch(
         "workers.quote_graphic_worker.generate_quote_graphic.apply_async"
+    ), patch(
+        "workers.thumbnail_worker.generate_thumbnail.apply_async"
+    ), patch(
+        "workers.transcript_worker.generate_transcript.apply_async"
     ):
         start_job.apply_async(args=[str(job.id)])
 

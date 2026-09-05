@@ -12,6 +12,7 @@ const SECTION_ORDER = [
   'SHOW_NOTES',
   'NEWSLETTER',
   'YOUTUBE_DESCRIPTION',
+  'EPISODE_THUMBNAIL',
   'QUOTE_GRAPHIC',
   'TRANSCRIPT',
 ]
@@ -23,6 +24,7 @@ const SECTION_LABELS = {
   SHOW_NOTES:          'Show Notes',
   NEWSLETTER:          'Newsletter',
   YOUTUBE_DESCRIPTION: 'YouTube Description',
+  EPISODE_THUMBNAIL:   'Episode Thumbnail',
   QUOTE_GRAPHIC:       'Quote Graphics',
   TRANSCRIPT:          'Transcript & Captions',
 }
@@ -165,6 +167,8 @@ export default function JobPage() {
               ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
               : type === 'TRANSCRIPT'
               ? 'grid-cols-1'
+              : type === 'EPISODE_THUMBNAIL'
+              ? 'grid-cols-1 lg:grid-cols-2'
               : 'grid-cols-1 lg:grid-cols-2'
 
           return (

@@ -192,7 +192,7 @@ def test_quote_slot_uses_modulo(tmp_path: Path) -> None:
 
     render_calls: list[dict] = []
 
-    def capture_render(quote, speaker, output_path, *, template_id):
+    def capture_render(quote, speaker, output_path, *, template_id, **_kwargs):
         render_calls.append({"quote": quote, "speaker": speaker})
 
     with (
@@ -217,7 +217,7 @@ def test_template_cycles_by_index(tmp_path: Path) -> None:
 
     render_calls: list[str] = []
 
-    def capture_template(quote, speaker, output_path, *, template_id):
+    def capture_template(quote, speaker, output_path, *, template_id, **_kwargs):
         render_calls.append(template_id)
 
     for idx in range(4):

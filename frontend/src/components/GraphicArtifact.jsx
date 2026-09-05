@@ -5,10 +5,14 @@ export default function GraphicArtifact({ artifact, onRegenerate }) {
   const { quote_text, speaker } = metadata
   const [regenerating, setRegenerating] = useState(false)
 
-  const label = `quote graphic ${(index ?? 0) + 1}`
-  const imgAlt = quote_text
+  const isThumbnail = artifact.type === 'EPISODE_THUMBNAIL'
+  const label = isThumbnail ? 'episode thumbnail' : `quote graphic ${(index ?? 0) + 1}`
+  const imgAlt = isThumbnail
+    ? `Thumbnail: ${metadata.title ?? 'episode'}`
+    : quote_text
     ? `"${quote_text}"${speaker ? ` — ${speaker}` : ''}`
     : label
+  const aspect = isThumbnail ? 'aspect-video' : 'aspect-square'
 
   async function handleRegenerate() {
     setRegenerating(true)
@@ -25,11 +29,11 @@ export default function GraphicArtifact({ artifact, onRegenerate }) {
         <img
           src={file_url}
           alt={imgAlt}
-          className="w-full rounded-lg aspect-square object-cover"
+          className={`w-full rounded-lg ${aspect} object-cover`}
         />
       ) : (
         <div
-          className="w-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 text-sm aspect-square"
+          className={`w-full rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 text-sm ${aspect}`}
           aria-label={`${label} — no preview available`}
         >
           No preview

@@ -11,14 +11,33 @@ from pathlib import Path
 from typing import Any
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import QuerySet
 
-from jobs.models import Artifact, ArtifactStatus, Job
+from jobs.models import Artifact, ArtifactStatus, Job, SourceType
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIST_LIMIT = 50
 MAX_LIST_LIMIT = 200
+
+
+def create_url_job(url: str, branding: Any = None) -> Job:
+    """Persist a PENDING URL-sourced Job (+ Pro branding, incl. logo file)."""
+    from pipeline.branding import store_logo
+
+    with transaction.atomic():
+        job = Job.objects.create(
+            source_type=SourceType.URL,
+            source_url=url,
+            podcast_name=getattr(branding, "podcast_name", None),
+            brand_color=getattr(branding, "brand_color", None) or "#6366f1",
+        )
+        logo = getattr(branding, "logo", None)
+        if logo is not None:
+            job.logo_path = store_logo(str(job.id), logo)
+            job.save(update_fields=["logo_path"])
+    return job
 
 
 def list_recent_jobs(limit: int = DEFAULT_LIST_LIMIT) -> list[Job]:

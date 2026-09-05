@@ -56,7 +56,8 @@ def is_permanent_error(exc: BaseException) -> bool:
     if isinstance(exc, ClaudeError):
         return not exc.transient
     return isinstance(
-        exc, (ObjectDoesNotExist, KeyError, ValueError, TypeError, AttributeError)
+        exc,
+        (ObjectDoesNotExist, KeyError, ValueError, TypeError, AttributeError, ImportError),
     )
 
 

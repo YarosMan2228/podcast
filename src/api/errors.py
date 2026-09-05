@@ -224,6 +224,17 @@ class InvalidTone(ApiError):
         )
 
 
+class BrandingInvalid(ApiError):
+    """Upload / from_url — bad ``podcast_name`` / ``brand_color`` / ``logo``."""
+
+    status_code = 400
+    default_code = "BRANDING_INVALID"
+    default_message = "Invalid branding settings."
+
+    def __init__(self, field: str, detail: str) -> None:
+        super().__init__(message=f"Invalid {field}: {detail}.", field=field)
+
+
 class RegenerateRateLimited(ApiError):
     """``POST /api/artifacts/:id/regenerate`` — SPEC §6.5 rate limit.
 

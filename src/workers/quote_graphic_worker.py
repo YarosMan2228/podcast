@@ -139,9 +139,16 @@ def generate_quote_graphic(self, artifact_id: str) -> None:
         _mark_processing(artifact)
 
         # Deferred import keeps Playwright out of the critical import path.
+        from pipeline.branding import branding_for_job
         from services.graphic_renderer import render_quote_to_png
 
-        render_quote_to_png(quote_text, speaker, output_path, template_id=template_id)
+        render_quote_to_png(
+            quote_text,
+            speaker,
+            output_path,
+            template_id=template_id,
+            branding=branding_for_job(artifact.job),
+        )
 
         # Store path relative to MEDIA_ROOT for URL assembly in the API.
         # Forward slashes always — this string becomes a URL segment.

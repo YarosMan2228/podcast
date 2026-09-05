@@ -8,7 +8,7 @@
       width: 1080px;
       height: 1080px;
       background: #0a0a0a;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'DejaVu Sans', sans-serif;
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -22,7 +22,15 @@
       left: 80px;
       width: 80px;
       height: 4px;
-      background: #6366f1;
+      background: {{BRAND_COLOR}};
+    }
+    .logo {
+      position: absolute;
+      top: 56px;
+      right: 80px;
+      max-height: 72px;
+      max-width: 220px;
+      object-fit: contain;
     }
     .quote {
       color: #ffffff;
@@ -38,11 +46,20 @@
       margin-top: 48px;
       font-weight: 400;
     }
+    .author::before {
+      content: "";
+      display: inline-block;
+      width: 28px;
+      height: 3px;
+      background: {{BRAND_COLOR}};
+      margin-right: 16px;
+      vertical-align: middle;
+    }
     .brand {
       position: absolute;
       bottom: 48px;
       left: 80px;
-      color: #444444;
+      color: #666666;
       font-size: 18px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -51,8 +68,9 @@
 </head>
 <body>
   <div class="accent"></div>
+  {{LOGO_IMG}}
   <div class="quote">&#8220;{{QUOTE}}&#8221;</div>
-  <div class="author">&#8212; {{SPEAKER}}</div>
+  <div class="author">{{SPEAKER}}</div>
   <div class="brand">{{PODCAST_NAME}}</div>
 </body>
 </html>

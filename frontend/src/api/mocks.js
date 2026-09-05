@@ -227,6 +227,18 @@ Keywords: AI startups, technical debt, ML infrastructure, founder advice, AI hyp
     version: 1,
   },
 
+  // EPISODE_THUMBNAIL (Pro) — 1280x720 cover
+  {
+    id: 'art-th-0',
+    type: 'EPISODE_THUMBNAIL',
+    index: 0,
+    status: 'READY',
+    file_url: 'https://picsum.photos/seed/podcastpack/1280/720',
+    text_content: null,
+    metadata: { title: 'The Hidden Cost of AI Hype', resolution: '1280x720', template_id: 'thumbnail_default' },
+    version: 1,
+  },
+
   // TRANSCRIPT (Pro) — readable text + SRT/VTT side files
   {
     id: 'art-tr-0',
@@ -350,6 +362,7 @@ export const MOCK_SSE_SEQUENCE = [
   [7000, 'artifact_ready',  { artifact_id: 'art-nl-0',  type: 'NEWSLETTER',           index: 0 }],
   [7200, 'artifact_ready',  { artifact_id: 'art-yt-0',  type: 'YOUTUBE_DESCRIPTION',  index: 0 }],
   [7400, 'artifact_ready',  { artifact_id: 'art-tr-0',  type: 'TRANSCRIPT',           index: 0 }],
+  [7600, 'artifact_ready',  { artifact_id: 'art-th-0',  type: 'EPISODE_THUMBNAIL',    index: 0 }],
   [8000, 'artifact_ready',  { artifact_id: 'art-vid-0', type: 'VIDEO_CLIP',           index: 0 }],
   [8500, 'artifact_ready',  { artifact_id: 'art-vid-1', type: 'VIDEO_CLIP',           index: 1 }],
   [9000, 'artifact_ready',  { artifact_id: 'art-vid-2', type: 'VIDEO_CLIP',           index: 2 }],
