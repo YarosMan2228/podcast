@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -78,17 +79,46 @@ def _is_audio_only(job: Job) -> bool:
     return False
 
 
+_HINT_STOPWORDS: frozenset[str] = frozenset(
+    {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "more",
+     "less", "about", "clip", "one", "something", "please", "make", "it", "и", "в",
+     "на", "про", "с", "о", "что", "как", "более", "менее", "клип"}
+)
+
+
+def _hint_tokens(hint: str | None) -> set[str]:
+    if not hint:
+        return set()
+    return {
+        t for t in re.findall(r"[\w'-]+", hint.lower())
+        if len(t) > 2 and t not in _HINT_STOPWORDS
+    }
+
+
+def _hint_score(candidate: dict[str, Any], tokens: set[str]) -> int:
+    """Keyword overlap between the user's hint and a candidate's text fields."""
+    if not tokens:
+        return 0
+    haystack = f"{candidate.get('hook_text', '')} {candidate.get('reason', '')}".lower()
+    return sum(1 for t in tokens if t in haystack)
+
+
 def _pick_candidate(
     candidates: list[dict[str, Any]],
     metadata_json: dict[str, Any],
     artifact_index: int,
     regenerate: bool,
+    hint: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Pick a clip candidate and return ``(candidate, used_index)``.
 
     Fresh generation always uses ``candidates[artifact_index]``. Regenerate
     looks for the next unused index; if none left, reuses the initial one
     with a random offset applied at clamp time (see :func:`_clamp_window`).
+
+    Pro: a free-text ``hint`` ("the part about pricing") re-ranks the unused
+    candidates by keyword overlap with their ``hook_text`` / ``reason`` —
+    no extra LLM call, so it's free and instant.
     """
     if not candidates:
         raise ValueError("no clip candidates available")
@@ -99,9 +129,15 @@ def _pick_candidate(
         idx = artifact_index if artifact_index < len(candidates) else 0
         return candidates[idx], idx
 
-    for idx, cand in enumerate(candidates):
-        if idx not in used:
-            return cand, idx
+    unused = [(idx, cand) for idx, cand in enumerate(candidates) if idx not in used]
+    tokens = _hint_tokens(hint)
+    if unused and tokens:
+        best_idx, best = max(unused, key=lambda ic: (_hint_score(ic[1], tokens), -ic[0]))
+        if _hint_score(best, tokens) > 0:
+            return best, best_idx
+
+    for idx, cand in unused:
+        return cand, idx
     # All used — reuse the first (will have its start offset shifted later).
     fallback_idx = used[0] if used else 0
     fallback_idx = fallback_idx if fallback_idx < len(candidates) else 0
@@ -164,9 +200,16 @@ def _render_clip(artifact: Artifact, regenerate: bool) -> None:
 
     candidates = list(analysis.clip_candidates_json or [])
     metadata = dict(artifact.metadata_json or {})
+    hint = metadata.get("regenerate_hint") if regenerate else None
     candidate, used_index = _pick_candidate(
-        candidates, metadata, artifact.index, regenerate
+        candidates, metadata, artifact.index, regenerate, hint=hint
     )
+
+    # Pro per-job options: 9:16 layout + caption preset (brand colour as the
+    # karaoke highlight so clips and graphics match).
+    from pipeline.clip_options import clip_options_for_job
+
+    options = clip_options_for_job(job)
 
     used_indices = list(metadata.get("used_candidate_indices") or [])
     exhausted = regenerate and used_index in used_indices
@@ -181,7 +224,13 @@ def _render_clip(artifact: Artifact, regenerate: bool) -> None:
     ass_path: str | None = os.path.join(
         tempfile.gettempdir(), f"sub_{uuid.uuid4().hex}.ass"
     )
-    ass_content = build_ass(words, start_ms, end_ms)
+    ass_content = build_ass(
+        words,
+        start_ms,
+        end_ms,
+        style=options.caption_style,
+        highlight_hex=getattr(job, "brand_color", None),
+    )
     # If no words fell inside the window, skip the subtitles filter entirely —
     # an ASS file with zero Dialogue lines still renders, but we save a
     # filesystem round-trip and make the failure mode explicit in logs.
@@ -215,6 +264,7 @@ def _render_clip(artifact: Artifact, regenerate: bool) -> None:
             output_path=str(output_path),
             audio_only=_is_audio_only(job),
             job_id=str(job.id),
+            layout=options.layout,
         )
     finally:
         # Always clean up the temp .ass, even on ffmpeg failure.
@@ -241,7 +291,8 @@ def _render_clip(artifact: Artifact, regenerate: bool) -> None:
             "virality_score": candidate.get("virality_score"),
             "file_size_bytes": file_size,
             "resolution": "1080x1920",
-            "captions_style": "karaoke_white_yellow",
+            "captions_style": options.caption_style,
+            "layout": options.layout,
             "used_candidate_indices": used_indices,
         }
     )

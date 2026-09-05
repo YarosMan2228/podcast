@@ -29,6 +29,7 @@ from django.conf import settings
 
 if TYPE_CHECKING:  # pragma: no cover
     from pipeline.branding import Branding
+    from pipeline.clip_options import ClipOptions
 from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 
@@ -142,6 +143,7 @@ def save_upload(
     *,
     mime_type: str | None = None,
     branding: "Branding | None" = None,
+    clip_options: "ClipOptions | None" = None,
 ) -> Job:
     """Persist *upload* to ``MEDIA_ROOT/uploads/<job_id>/`` and create a Job.
 
@@ -188,6 +190,8 @@ def save_upload(
             podcast_name=branding.podcast_name if branding else None,
             brand_color=branding.brand_color if branding else "#6366f1",
             logo_path=logo_rel,
+            clip_layout=clip_options.layout if clip_options else "pad",
+            caption_style=clip_options.caption_style if clip_options else "karaoke",
         )
     return job
 

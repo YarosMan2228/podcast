@@ -46,6 +46,7 @@ from api.errors import (
     RegenerateRateLimited,
 )
 from jobs.models import Artifact, ArtifactStatus, ArtifactType, Job, JobStatus
+from pipeline.clip_options import clean_hint
 
 logger = logging.getLogger(__name__)
 
@@ -469,23 +470,36 @@ def regenerate_artifact(request: Request, artifact_id: str) -> Response:
         raise ArtifactNotFound(artifact_id=artifact_id)
 
     tone: str | None = None
+    hint: str | None = None
     if request.data:
         raw_tone = request.data.get("tone")
         if raw_tone is not None:
             if raw_tone not in _VALID_TONES:
                 raise InvalidTone(raw_tone, set(_VALID_TONES))
             tone = raw_tone
+        # Pro: free-text instruction ("shorter", "focus on the pricing part").
+        hint = clean_hint(request.data.get("hint"))
 
     _enforce_regenerate_rate_limit(str(artifact.id))
+
+    # Persist the hint on the row so the worker (any type) can read it; an
+    # empty hint clears a previous one so it doesn't leak into later runs.
+    metadata = dict(artifact.metadata_json or {})
+    if hint:
+        metadata["regenerate_hint"] = hint
+    else:
+        metadata.pop("regenerate_hint", None)
 
     new_version = artifact.version + 1
     Artifact.objects.filter(id=artifact.id).update(
         version=new_version,
         status=ArtifactStatus.QUEUED,
         error=None,
+        metadata_json=metadata,
     )
     artifact.version = new_version
     artifact.status = ArtifactStatus.QUEUED
+    artifact.metadata_json = metadata
 
     _dispatch_worker(artifact, tone)
 
@@ -532,14 +546,30 @@ def _stream_file(path: "Path", chunk_size: int = _ZIP_STREAM_CHUNK) -> Iterator[
         fh.close()
 
 
+def _stream_and_unlink(path: "Path") -> Iterator[bytes]:
+    """Stream a temp file, then delete it (partial ZIPs are built per request)."""
+    try:
+        yield from _stream_file(path)
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 @api_view(["GET"])
 def download_package(request: Request, job_id: str) -> StreamingHttpResponse:
     """Stream the packaged ZIP for a COMPLETED job (SPEC §9.3).
+
+    Pro: ``?part=clips|text|graphics|subtitles`` streams just that folder as
+    a fresh ZIP (built on the fly from the READY artifacts, so it also works
+    for a job that is still GENERATING).
 
     Errors:
         * ``404 JOB_NOT_FOUND`` — unknown UUID.
         * ``404 PACKAGE_NOT_READY`` — job is not COMPLETED yet, or the ZIP
           file is missing on disk (e.g. cleanup ran).
+        * ``400 CLIP_OPTIONS_INVALID`` — unknown ``part``.
     """
     from pathlib import Path
 
@@ -548,6 +578,32 @@ def download_package(request: Request, job_id: str) -> StreamingHttpResponse:
         job = Job.objects.get(id=normalized)
     except Job.DoesNotExist as exc:
         raise JobNotFound(job_id=job_id) from exc
+
+    part = (request.query_params.get("part") or "").strip().lower()
+    if part:
+        from workers.packager import PARTIAL_PARTS, build_partial_zip
+
+        if part not in PARTIAL_PARTS:
+            from api.errors import ClipOptionsInvalid
+
+            raise ClipOptionsInvalid(field="part", detail=f"one of {', '.join(PARTIAL_PARTS)}")
+        tmp_zip, included = build_partial_zip(job, part)
+        if included == 0:
+            try:
+                tmp_zip.unlink()
+            except OSError:
+                pass
+            raise PackageNotReady(status=f"{job.status}; no ready {part} yet")
+        response = StreamingHttpResponse(
+            _stream_and_unlink(tmp_zip), content_type="application/zip"
+        )
+        short_id = str(job.id).split("-")[0]
+        response["Content-Disposition"] = (
+            f'attachment; filename="podcast_pack_{short_id}_{part}.zip"'
+        )
+        response["Content-Length"] = str(tmp_zip.stat().st_size)
+        response["Cache-Control"] = "no-store"
+        return response
 
     if job.status != JobStatus.COMPLETED or not job.package_path:
         raise PackageNotReady(status=job.status)

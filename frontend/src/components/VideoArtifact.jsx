@@ -1,16 +1,18 @@
 import { useState } from 'react'
+import RegenerateHint from './RegenerateHint.jsx'
 
 export default function VideoArtifact({ artifact, onRegenerate }) {
   const { file_url, metadata = {}, version, index } = artifact
   const { virality_score, duration_sec, hook_text } = metadata
   const [regenerating, setRegenerating] = useState(false)
+  const [hint, setHint] = useState('')
 
   const label = `video clip ${(index ?? 0) + 1}`
 
   async function handleRegenerate() {
     setRegenerating(true)
     try {
-      await onRegenerate?.(artifact)
+      await onRegenerate?.(artifact, null, hint)
     } finally {
       setRegenerating(false)
     }
@@ -53,6 +55,8 @@ export default function VideoArtifact({ artifact, onRegenerate }) {
         )}
         {version > 1 && <span aria-label={`Version ${version}`}>v{version}</span>}
       </div>
+
+      <RegenerateHint value={hint} onChange={setHint} placeholder="Pick a different moment? e.g. “the pricing part”" />
 
       <div className="flex gap-2">
         {file_url && (

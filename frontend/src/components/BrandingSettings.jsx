@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { storeBranding } from '../api/branding.js'
+import { storeBranding, CLIP_LAYOUTS, CAPTION_STYLES } from '../api/branding.js'
 
 const LOGO_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'])
 const MAX_LOGO_BYTES = 2 * 1024 * 1024
@@ -53,7 +53,7 @@ export default function BrandingSettings({ value, onChange }) {
         className="text-sm text-gray-500 hover:text-indigo-600 flex items-center gap-2"
       >
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-        Branding
+        Branding &amp; clip options
         {(value.podcast_name || value.logo) && !open && (
           <span className="text-xs text-gray-400">
             · {value.podcast_name || 'logo set'}
@@ -116,6 +116,47 @@ export default function BrandingSettings({ value, onChange }) {
               </span>
             )}
           </div>
+
+          <fieldset className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-gray-100 pt-4">
+            <legend className="sr-only">Clip options</legend>
+
+            <div className="flex flex-col gap-1 text-sm" role="radiogroup" aria-label="Vertical layout">
+              <span className="text-gray-600">Vertical clips (9:16)</span>
+              {CLIP_LAYOUTS.map((opt) => (
+                <label key={opt.value} className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="clip_layout"
+                    value={opt.value}
+                    checked={value.clip_layout === opt.value}
+                    onChange={() => update({ clip_layout: opt.value })}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="text-gray-800">{opt.label}</span>
+                    <span className="block text-xs text-gray-400">{opt.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-gray-600">Captions</span>
+              <select
+                value={value.caption_style}
+                onChange={(e) => update({ caption_style: e.target.value })}
+                aria-label="Caption style"
+                className="border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {CAPTION_STYLES.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-400">
+                {CAPTION_STYLES.find((o) => o.value === value.caption_style)?.hint}
+              </span>
+            </label>
+          </fieldset>
         </div>
       )}
     </section>

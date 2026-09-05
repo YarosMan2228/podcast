@@ -7,6 +7,19 @@
 
 ---
 
+## 0a. Pro-версия (2026-09-05) — четыре фичи, по коммиту на каждую
+
+| Коммит | Фича | Что добавлено |
+|---|---|---|
+| `9aaa847` | **Любой язык + транскрипт SRT/VTT** | Ограничение «только английский» снято (`TRANSCRIPTION_ALLOWED_LANGUAGES` пусто = любой). Все промпты Claude получают инструкцию писать на языке подкаста (`pipeline/prompts/languages.py`). Новый артефакт `TRANSCRIPT` (миграция 0003): читаемый текст `[MM:SS] …`, файлы `transcript.srt` / `.vtt` (`pipeline/subtitles.py`, `workers/transcript_worker.py`). В ZIP: `text/transcript.txt` + `subtitles/`. API артефакта отдаёт `files: {srt, vtt}`. |
+| `04e4004` | **История эпизодов + удаление** | `GET /api/jobs?limit=N`, `DELETE /api/jobs/:id` (каскад + файлы uploads/artifacts/ZIP; `services/jobs_service.py`). Страница `/history`, ссылки с лендинга и страницы job. |
+| `8ab29d3` | **Брендинг + thumbnail** | `Job.podcast_name / brand_color / logo_path` (миграция 0004). Поля принимаются upload'ом (multipart) и from_url (JSON или multipart с логотипом), валидация → `400 BRANDING_INVALID`. Quote-шаблоны используют цвет и логотип (data-URI). Новый артефакт `EPISODE_THUMBNAIL` 1280×720 (`workers/thumbnail_worker.py`, шаблон `thumbnail_default.html`). Панель «Branding & clip options» на лендинге, настройки запоминаются в localStorage. |
+| (этот) | **Клипы: кроп 9:16, стили субтитров, подсказки, скачивание папок** | `Job.clip_layout` (`pad` / `crop`) и `Job.caption_style` (`karaoke` / `clean` / `boxed`), миграция 0005. Кроп: `scale=…:increase,crop=1080:1920`. Karaoke-подсветка в цвете бренда. `POST /regenerate` принимает `hint` (≤300 симв.): текст → блок `<user_request>` в промпте, видео → выбор кандидата по совпадению слов с hook/reason. Regenerate quote-графики теперь даёт другую цитату и шаблон. `GET /download?part=clips|text|graphics|subtitles` собирает ZIP папки на лету (работает и до COMPLETED). |
+
+Новые тесты: `test_transcript_feature.py`, `test_jobs_history.py`, `test_branding_thumbnail.py`, `test_clip_options.py`; frontend: `HistoryPage.test.jsx`, `BrandingSettings.test.jsx`.
+
+Не сделано: face-tracking (кроп по центру, не по лицу), пользовательские аккаунты (брендинг per-job), публикация в соцсети по расписанию.
+
 ## 0. Review-батч (2026-09-05) — что было сломано и что починено
 
 Полный аудит кода против `docs/SPEC.md` + `DIVISION_OF_WORK.md`. Все тесты были зелёные, но часть SPEC не была реализована, а несколько багов не покрывались тестами.

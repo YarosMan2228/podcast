@@ -235,6 +235,17 @@ class BrandingInvalid(ApiError):
         super().__init__(message=f"Invalid {field}: {detail}.", field=field)
 
 
+class ClipOptionsInvalid(ApiError):
+    """Bad ``clip_layout`` / ``caption_style`` on upload, or ``hint`` on regenerate."""
+
+    status_code = 400
+    default_code = "CLIP_OPTIONS_INVALID"
+    default_message = "Invalid clip options."
+
+    def __init__(self, field: str, detail: str) -> None:
+        super().__init__(message=f"Invalid {field}: {detail}.", field=field)
+
+
 class RegenerateRateLimited(ApiError):
     """``POST /api/artifacts/:id/regenerate`` — SPEC §6.5 rate limit.
 

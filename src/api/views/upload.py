@@ -18,6 +18,7 @@ from api.errors import (
     UrlUnsupportedHost,
 )
 from pipeline.branding import parse_branding
+from pipeline.clip_options import parse_clip_options
 from pipeline.ingestion import resolve_upload_mime, save_upload
 from pipeline.url_ingestion import (
     UnsupportedHostError,
@@ -46,7 +47,8 @@ def _gate_on_preflight() -> None:
 @parser_classes([MultiPartParser])
 def upload(request: Request) -> Response:
     """Multipart: ``file`` (required) + optional Pro fields
-    ``podcast_name``, ``brand_color`` (#RRGGBB), ``logo`` (image ≤ 2 MB)."""
+    ``podcast_name``, ``brand_color`` (#RRGGBB), ``logo`` (image ≤ 2 MB),
+    ``clip_layout`` (pad|crop), ``caption_style`` (karaoke|clean|boxed)."""
     _gate_on_preflight()
 
     uploaded = request.FILES.get("file")
@@ -60,8 +62,9 @@ def upload(request: Request) -> Response:
     if mime is None:
         raise UploadInvalidFormat(mime=uploaded.content_type)
     branding = parse_branding(request.data, request.FILES)
+    clip_options = parse_clip_options(request.data)
 
-    job = save_upload(uploaded, mime_type=mime, branding=branding)
+    job = save_upload(uploaded, mime_type=mime, branding=branding, clip_options=clip_options)
     # .claude/rules/celery-tasks.md §7: only dispatch after the Job row is
     # committed. save_upload's transaction.atomic() has already exited here.
     start_job.apply_async(args=[str(job.id)])
@@ -91,8 +94,9 @@ def from_url(request: Request) -> Response:
     except UnsupportedHostError as exc:
         raise UrlUnsupportedHost(host=exc.host) from exc
     branding = parse_branding(data, request.FILES)
+    clip_options = parse_clip_options(data)
 
-    job = create_url_job(url, branding)
+    job = create_url_job(url, branding, clip_options)
     start_job.apply_async(args=[str(job.id)])
     return Response(
         {"job_id": str(job.id), "status": job.status},

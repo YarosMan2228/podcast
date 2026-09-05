@@ -165,21 +165,29 @@ def _escape_ass_text(text: str) -> str:
 
 
 def _phrase_dialogue(
-    phrase: Sequence[Word], clip_start_ms: int, style: str = "Default"
+    phrase: Sequence[Word],
+    clip_start_ms: int,
+    style: str = "Default",
+    *,
+    karaoke: bool = True,
 ) -> str:
     """Build one ``Dialogue:`` line for a phrase of words.
 
     Timestamps are **clip-relative** because ffmpeg's subtitles filter
     reads the ASS against the clip's own timeline (the seek happens on
-    the input, not inside the subtitle file).
+    the input, not inside the subtitle file). ``karaoke=False`` drops the
+    ``\\k`` tags so the phrase shows in one colour (Pro "clean" preset).
     """
     phrase_start = max(0, phrase[0].start_ms - clip_start_ms)
     phrase_end = max(phrase_start, phrase[-1].end_ms - clip_start_ms)
 
     parts: list[str] = []
     for w in phrase:
-        duration_cs = max(1, w.duration_ms // 10)
-        parts.append(f"{{\\k{duration_cs}}}{_escape_ass_text(w.text)}")
+        if karaoke:
+            duration_cs = max(1, w.duration_ms // 10)
+            parts.append(f"{{\\k{duration_cs}}}{_escape_ass_text(w.text)}")
+        else:
+            parts.append(_escape_ass_text(w.text))
     body = " ".join(parts)
 
     return (
@@ -188,8 +196,93 @@ def _phrase_dialogue(
     )
 
 
-def _ass_header() -> str:
-    """SPEC §5.4 baseline style. Kept as one string so diffs are readable."""
+@dataclass(frozen=True)
+class CaptionPreset:
+    """One burned-in caption look (Pro ``caption_style``).
+
+    ``karaoke`` — SPEC §5.4 default: word-by-word highlight (\\k tags).
+    ``clean``   — plain white, thick outline, no per-word highlight.
+    ``boxed``   — white text on a translucent black box (BorderStyle 3),
+                  word highlight in the brand colour.
+    """
+
+    name: str
+    fontsize: int
+    primary: str
+    secondary: str
+    outline_colour: str
+    back_colour: str
+    border_style: int
+    outline: int
+    shadow: int
+    karaoke: bool
+    margin_v: int = STYLE_MARGIN_V
+
+
+def hex_to_ass_colour(hex_rgb: str | None, alpha: int = 0) -> str | None:
+    """``#rrggbb`` → ASS ``&HAABBGGRR``; ``None`` for invalid input."""
+    if not hex_rgb:
+        return None
+    h = hex_rgb.strip().lstrip("#")
+    if len(h) != 6:
+        return None
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+    return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
+
+
+def caption_preset(style: str = "karaoke", highlight_hex: str | None = None) -> CaptionPreset:
+    """Resolve a preset by name; unknown names fall back to ``karaoke``.
+
+    ``highlight_hex`` (the job's brand colour) replaces the yellow "sung"
+    colour for the karaoke-based presets so captions match the graphics.
+    """
+    highlight = hex_to_ass_colour(highlight_hex) or STYLE_PRIMARY
+    if style == "clean":
+        return CaptionPreset(
+            name="clean",
+            fontsize=68,
+            primary="&H00FFFFFF",
+            secondary="&H00FFFFFF",
+            outline_colour=STYLE_OUTLINE_COLOUR,
+            back_colour="&H00000000",
+            border_style=1,
+            outline=5,
+            shadow=1,
+            karaoke=False,
+        )
+    if style == "boxed":
+        return CaptionPreset(
+            name="boxed",
+            fontsize=64,
+            primary=highlight,
+            secondary="&H00FFFFFF",
+            outline_colour="&H80000000",  # box colour (BorderStyle 3 uses OutlineColour)
+            back_colour="&H80000000",
+            border_style=3,
+            outline=14,
+            shadow=0,
+            karaoke=True,
+        )
+    return CaptionPreset(
+        name="karaoke",
+        fontsize=STYLE_FONTSIZE,
+        primary=highlight,
+        secondary=STYLE_SECONDARY,
+        outline_colour=STYLE_OUTLINE_COLOUR,
+        back_colour="&H00000000",
+        border_style=1,
+        outline=STYLE_OUTLINE,
+        shadow=0,
+        karaoke=True,
+    )
+
+
+def _ass_header(preset: CaptionPreset | None = None) -> str:
+    """SPEC §5.4 baseline style (or a Pro preset). One string so diffs read well."""
+    p = preset or caption_preset()
     return (
         "[Script Info]\n"
         "Title: Podcast Pack karaoke\n"
@@ -204,10 +297,10 @@ def _ass_header() -> str:
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Default,{STYLE_FONTNAME},{STYLE_FONTSIZE},"
-        f"{STYLE_PRIMARY},{STYLE_SECONDARY},{STYLE_OUTLINE_COLOUR},"
-        "&H00000000,-1,0,0,0,100,100,0,0,1,"
-        f"{STYLE_OUTLINE},0,{STYLE_ALIGNMENT},40,40,{STYLE_MARGIN_V},1\n"
+        f"Style: Default,{STYLE_FONTNAME},{p.fontsize},"
+        f"{p.primary},{p.secondary},{p.outline_colour},"
+        f"{p.back_colour},-1,0,0,0,100,100,0,0,{p.border_style},"
+        f"{p.outline},{p.shadow},{STYLE_ALIGNMENT},40,40,{p.margin_v},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -222,15 +315,19 @@ def build_ass(
     *,
     max_words_per_phrase: int = MAX_WORDS_PER_PHRASE,
     pause_break_ms: int = PAUSE_BREAK_MS,
+    style: str = "karaoke",
+    highlight_hex: str | None = None,
 ) -> str:
     """Render a full .ass file for the clip window.
 
     Words outside the window are dropped; remaining words are grouped
     into phrases and each phrase becomes one ``Dialogue`` line with
-    ``\\k``-tagged karaoke highlights. The output always contains the
-    header + style section even if no words fall in the window (the
-    worker treats that as "no captions" and still renders a silent clip).
+    ``\\k``-tagged karaoke highlights (unless the preset disables them).
+    The output always contains the header + style section even if no
+    words fall in the window (the worker treats that as "no captions" and
+    still renders a silent clip).
     """
+    preset = caption_preset(style, highlight_hex)
     in_clip = clip_words(words, clip_start_ms, clip_end_ms)
     phrases = group_into_phrases(
         in_clip,
@@ -238,6 +335,6 @@ def build_ass(
         pause_break_ms=pause_break_ms,
     )
     events = "\n".join(
-        _phrase_dialogue(p, clip_start_ms) for p in phrases
+        _phrase_dialogue(p, clip_start_ms, karaoke=preset.karaoke) for p in phrases
     )
-    return _ass_header() + (events + "\n" if events else "")
+    return _ass_header(preset) + (events + "\n" if events else "")

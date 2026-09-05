@@ -33,6 +33,8 @@ function appendOptions(form, options = {}) {
   if (options.podcast_name) form.append('podcast_name', options.podcast_name)
   if (options.brand_color) form.append('brand_color', options.brand_color)
   if (options.logo) form.append('logo', options.logo)
+  if (options.clip_layout) form.append('clip_layout', options.clip_layout)
+  if (options.caption_style) form.append('caption_style', options.caption_style)
 }
 
 /**
@@ -67,6 +69,8 @@ export async function submitUrl(url, options = {}) {
     const body = { url }
     if (options.podcast_name) body.podcast_name = options.podcast_name
     if (options.brand_color) body.brand_color = options.brand_color
+    if (options.clip_layout) body.clip_layout = options.clip_layout
+    if (options.caption_style) body.caption_style = options.caption_style
     res = await fetch('/api/jobs/from_url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -97,13 +101,17 @@ export async function deleteJob(jobId) {
 }
 
 /**
- * Regenerate an artifact, optionally with a tone override.
+ * Regenerate an artifact, optionally with a tone override and/or a free-text
+ * hint ("shorter", "focus on the pricing part").
  * @param {string} artifactId
  * @param {string|null} tone
+ * @param {string|null} [hint]
  * @returns {Promise<{artifact_id: string, status: string, version: number}>}
  */
-export async function regenerateArtifact(artifactId, tone) {
-  const body = tone ? { tone } : {}
+export async function regenerateArtifact(artifactId, tone, hint = null) {
+  const body = {}
+  if (tone) body.tone = tone
+  if (hint && hint.trim()) body.hint = hint.trim()
   const res = await fetch(`/api/artifacts/${artifactId}/regenerate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

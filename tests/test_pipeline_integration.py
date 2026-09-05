@@ -209,7 +209,7 @@ def test_full_pipeline_upload_to_video_clips(tmp_path: Path) -> None:
         meta = art.metadata_json
         assert meta["source_clip_candidate_index"] == idx
         assert meta["resolution"] == "1080x1920"
-        assert meta["captions_style"] == "karaoke_white_yellow"
+        assert meta["captions_style"] == "karaoke"
 
     # -------- ffmpeg was called once per clip --------
     assert ff_clip.call_count == NUM_VIDEO_CLIPS

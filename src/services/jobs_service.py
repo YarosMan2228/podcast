@@ -22,8 +22,8 @@ DEFAULT_LIST_LIMIT = 50
 MAX_LIST_LIMIT = 200
 
 
-def create_url_job(url: str, branding: Any = None) -> Job:
-    """Persist a PENDING URL-sourced Job (+ Pro branding, incl. logo file)."""
+def create_url_job(url: str, branding: Any = None, clip_options: Any = None) -> Job:
+    """Persist a PENDING URL-sourced Job (+ Pro branding / clip options)."""
     from pipeline.branding import store_logo
 
     with transaction.atomic():
@@ -32,6 +32,8 @@ def create_url_job(url: str, branding: Any = None) -> Job:
             source_url=url,
             podcast_name=getattr(branding, "podcast_name", None),
             brand_color=getattr(branding, "brand_color", None) or "#6366f1",
+            clip_layout=getattr(clip_options, "layout", None) or "pad",
+            caption_style=getattr(clip_options, "caption_style", None) or "karaoke",
         )
         logo = getattr(branding, "logo", None)
         if logo is not None:

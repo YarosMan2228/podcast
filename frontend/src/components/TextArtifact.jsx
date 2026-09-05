@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import ToneSelector from './ToneSelector.jsx'
+import RegenerateHint from './RegenerateHint.jsx'
 import { showToast } from '../api/toast.js'
 
 function parseTweets(textContent) {
@@ -28,6 +29,7 @@ export default function TextArtifact({ artifact, onRegenerate }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
   const [tone, setTone] = useState(artifact.metadata?.tone ?? 'analytical')
+  const [hint, setHint] = useState('')
   const [regenerating, setRegenerating] = useState(false)
 
   const isTwitter = artifact.type === 'TWITTER_THREAD'
@@ -49,7 +51,7 @@ export default function TextArtifact({ artifact, onRegenerate }) {
   async function handleRegenerate() {
     setRegenerating(true)
     try {
-      await onRegenerate?.(artifact, tone)
+      await onRegenerate?.(artifact, tone, hint)
     } finally {
       setRegenerating(false)
     }
@@ -111,6 +113,8 @@ export default function TextArtifact({ artifact, onRegenerate }) {
         </button>
 
         <ToneSelector value={tone} onChange={setTone} />
+
+        <RegenerateHint value={hint} onChange={setHint} />
 
         <button
           onClick={handleRegenerate}

@@ -28,6 +28,9 @@ class Job(djmodels.Model):
     podcast_name = djmodels.CharField(max_length=120, null=True, blank=True)
     brand_color = djmodels.CharField(max_length=7, default="#6366f1")
     logo_path = djmodels.TextField(null=True, blank=True)
+    # Pro clip options (SPEC §5.4 step 2 "pad or crop via flag" → per job).
+    clip_layout = djmodels.CharField(max_length=8, default="pad")
+    caption_style = djmodels.CharField(max_length=16, default="karaoke")
     duration_sec = djmodels.FloatField(null=True, blank=True)
     file_size_bytes = djmodels.BigIntegerField(null=True, blank=True)
     mime_type = djmodels.CharField(max_length=64, null=True, blank=True)

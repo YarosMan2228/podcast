@@ -29,6 +29,13 @@ const SECTION_LABELS = {
   TRANSCRIPT:          'Transcript & Captions',
 }
 
+const PART_DOWNLOADS = [
+  ['clips', 'Clips'],
+  ['text', 'Text'],
+  ['graphics', 'Graphics'],
+  ['subtitles', 'Subtitles'],
+]
+
 function groupByType(artifacts) {
   const groups = {}
   for (const art of artifacts) {
@@ -43,9 +50,9 @@ export default function JobPage() {
   const navigate = useNavigate()
   const { job, artifacts, isConnected, refetch } = useJob(jobId)
 
-  async function handleRegenerate(artifact, tone) {
+  async function handleRegenerate(artifact, tone, hint) {
     try {
-      await regenerateArtifact(artifact.id, tone ?? null)
+      await regenerateArtifact(artifact.id, tone ?? null, hint ?? null)
       refetch()
       showToast('Regenerating…')
     } catch (err) {
@@ -95,7 +102,7 @@ export default function JobPage() {
 
   const isCompleted = job.status === 'COMPLETED'
   const groups = groupByType(artifacts)
-  const { progress } = job
+  const progress = job.progress ?? null
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -118,19 +125,38 @@ export default function JobPage() {
             )}
           </div>
 
-          {isCompleted && job.package_url && (
-            <a
-              // The API endpoint (not the raw /media URL) — it sets
-              // Content-Disposition: attachment and answers 404
-              // PACKAGE_NOT_READY instead of a bare static 404.
-              href={`/api/jobs/${job.job_id ?? jobId}/download`}
-              download
-              aria-label="Download all artifacts as ZIP"
-              className="shrink-0 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
-            >
-              Download All (ZIP)
-            </a>
-          )}
+          <div className="shrink-0 flex items-center gap-2 flex-wrap">
+            {/* Per-folder ZIPs are built on the fly from READY artifacts, so
+                they work while the job is still generating. */}
+            {(progress?.ready ?? 0) > 0 && (
+              <span className="flex items-center gap-1 text-xs text-gray-500" aria-label="Download parts">
+                {PART_DOWNLOADS.map(([part, label]) => (
+                  <a
+                    key={part}
+                    href={`/api/jobs/${job.job_id ?? jobId}/download?part=${part}`}
+                    download
+                    aria-label={`Download ${label} as ZIP`}
+                    className="px-2 py-1 border border-gray-200 rounded-md hover:bg-gray-50 text-gray-600"
+                  >
+                    {label}
+                  </a>
+                ))}
+              </span>
+            )}
+            {isCompleted && job.package_url && (
+              <a
+                // The API endpoint (not the raw /media URL) — it sets
+                // Content-Disposition: attachment and answers 404
+                // PACKAGE_NOT_READY instead of a bare static 404.
+                href={`/api/jobs/${job.job_id ?? jobId}/download`}
+                download
+                aria-label="Download all artifacts as ZIP"
+                className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
+              >
+                Download All (ZIP)
+              </a>
+            )}
+          </div>
         </div>
       </header>
 

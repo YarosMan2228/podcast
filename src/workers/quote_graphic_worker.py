@@ -123,12 +123,15 @@ def generate_quote_graphic(self, artifact_id: str) -> None:
                 "cannot render quote graphic"
             )
 
-        # Wrap around if fewer quotes than artifact slots.
-        slot = artifact.index % len(eligible)
+        # Wrap around if fewer quotes than artifact slots. Regenerate (version
+        # > 1) walks to the next quote + next template so the user actually
+        # gets a different card instead of the same PNG re-rendered (Pro).
+        step = max(0, int(artifact.version or 1) - 1)
+        slot = (artifact.index + step) % len(eligible)
         quote_data = eligible[slot]
         quote_text: str = quote_data.get("text", "")
         speaker: str = quote_data.get("speaker", "")
-        template_id: str = TEMPLATE_CYCLE[artifact.index % len(TEMPLATE_CYCLE)]
+        template_id: str = TEMPLATE_CYCLE[(artifact.index + step) % len(TEMPLATE_CYCLE)]
 
         output_path = (
             Path(settings.ARTIFACTS_ROOT)

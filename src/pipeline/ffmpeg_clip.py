@@ -105,13 +105,31 @@ def _escape_ass_path_for_filter(path: str) -> str:
     return p.replace("'", r"\'")
 
 
-def _build_video_filter(ass_path: str | None) -> str:
-    """9:16 pad + burn-in subtitles (if any). Single ``-vf`` chain."""
-    chain = [
-        f"scale=w={OUTPUT_WIDTH}:h={OUTPUT_HEIGHT}"
-        ":force_original_aspect_ratio=decrease",
-        f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black",
-    ]
+LAYOUT_PAD = "pad"
+LAYOUT_CROP = "crop"
+
+
+def _build_video_filter(ass_path: str | None, *, layout: str = LAYOUT_PAD) -> str:
+    """9:16 framing + burn-in subtitles (if any). Single ``-vf`` chain.
+
+    * ``pad``  — SPEC §5.4 default: fit the whole frame, black bars top/bottom.
+    * ``crop`` — Pro "fill": scale so the frame *covers* 1080×1920, then
+      center-crop. For a 16:9 talking-head shot this keeps the speaker
+      (usually framed centrally) and drops the side thirds — the look
+      Opus Clip / CapCut produce, without face tracking.
+    """
+    if layout == LAYOUT_CROP:
+        chain = [
+            f"scale=w={OUTPUT_WIDTH}:h={OUTPUT_HEIGHT}"
+            ":force_original_aspect_ratio=increase",
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+        ]
+    else:
+        chain = [
+            f"scale=w={OUTPUT_WIDTH}:h={OUTPUT_HEIGHT}"
+            ":force_original_aspect_ratio=decrease",
+            f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black",
+        ]
     if ass_path:
         escaped = _escape_ass_path_for_filter(ass_path)
         chain.append(f"subtitles='{escaped}'")
@@ -143,6 +161,7 @@ def build_clip_command(
     output_path: str,
     *,
     audio_only: bool = False,
+    layout: str = LAYOUT_PAD,
 ) -> list[str]:
     """Assemble the ffmpeg argv for a single clip.
 
@@ -173,7 +192,7 @@ def build_clip_command(
         cmd += ["-filter_complex", _build_audio_filter_complex(ass_path)]
         cmd += ["-map", "[v]", "-map", "0:a"]
     else:
-        cmd += ["-vf", _build_video_filter(ass_path)]
+        cmd += ["-vf", _build_video_filter(ass_path, layout=layout)]
 
     cmd += [
         "-c:v", "libx264",
@@ -202,6 +221,7 @@ def build_vertical_clip(
     *,
     audio_only: bool = False,
     job_id: str | None = None,
+    layout: str = LAYOUT_PAD,
 ) -> None:
     """Render a single 9:16 clip from ``input_media_path`` to ``output_path``.
 
@@ -221,6 +241,7 @@ def build_vertical_clip(
         ass_path,
         output_path,
         audio_only=audio_only,
+        layout=layout,
     )
 
     # Ensure the output directory exists — ffmpeg would otherwise fail

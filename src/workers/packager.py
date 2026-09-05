@@ -409,6 +409,62 @@ def package_job(self, job_id: str, repackage: bool = False) -> None:
     )
 
 
+# ``?part=`` values for the partial download endpoint → zip folder prefix.
+PARTIAL_PARTS: tuple[str, ...] = ("clips", "text", "graphics", "subtitles")
+
+
+def build_partial_zip(job: Job, part: str) -> tuple[Path, int]:
+    """Build a temp ZIP holding only the ``<part>/`` folder of the pack.
+
+    Returns ``(temp_zip_path, included_count)``. The caller streams and
+    deletes the file. Built from the current READY artifacts rather than
+    by slicing the stored package, so it reflects regenerated versions and
+    works before packaging has run at all.
+    """
+    import tempfile
+
+    if part not in PARTIAL_PARTS:
+        raise ValueError(f"unknown part {part!r}")
+
+    artifacts = list(Artifact.objects.filter(job_id=job.id).order_by("type", "index"))
+    fd, tmp_name = tempfile.mkstemp(prefix=f"podcast_pack_{part}_", suffix=".zip")
+    import os
+
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+
+    included = 0
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for art in artifacts:
+            if art.status != ArtifactStatus.READY:
+                continue
+            folder = (_ARCHIVE_LAYOUT.get(art.type) or ("misc", ""))[0]
+            extra = _EXTRA_FILES_LAYOUT.get(art.type)
+
+            if extra and extra[0] == part:
+                _, name_tpl = extra
+                for label, rel in ((art.metadata_json or {}).get("files") or {}).items():
+                    p = Path(rel)
+                    if not p.is_absolute():
+                        p = Path(settings.MEDIA_ROOT) / p
+                    if p.exists():
+                        zf.write(p, f"{part}/{name_tpl.format(label=label)}")
+                        included += 1
+
+            if folder != part:
+                continue
+            archive = _archive_name(art)
+            if art.text_content:
+                zf.writestr(archive, art.text_content)
+                included += 1
+                continue
+            src = _resolve_artifact_file(art)
+            if src is not None:
+                zf.write(src, archive)
+                included += 1
+    return tmp_path, included
+
+
 def _package_url(rel_zip: Path) -> str:
     media_url = settings.MEDIA_URL or "/media/"
     if not media_url.endswith("/"):
