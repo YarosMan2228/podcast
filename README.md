@@ -18,6 +18,8 @@ cd frontend && npm install && npm run dev
 
 Проверить ключи до первой загрузки: `docker compose run --rm app python manage.py preflight --probe`.
 
+Выкатить на сервер (Caddy + HTTPS + gunicorn): `docs/DEPLOY.md`. Безопасность и токены доступа: `docs/SECURITY.md`.
+
 Без Docker нужны локальные ffmpeg/ffprobe, Postgres и Redis:
 `python manage.py migrate && python manage.py runserver` + `celery -A core worker -Q default,video,text_artifacts,graphics` (с `PYTHONPATH=src`).
 

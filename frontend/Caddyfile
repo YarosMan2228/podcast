@@ -1,0 +1,36 @@
+# SITE_ADDRESS examples:
+#   :80                → plain HTTP (local / behind another proxy)
+#   podcast.example.com → Caddy obtains a Let's Encrypt certificate itself
+{$SITE_ADDRESS::80} {
+	encode gzip zstd
+
+	# Backend: API, SSE stream, media files, ZIP downloads.
+	@backend path /api/* /media/*
+	handle @backend {
+		reverse_proxy app:8000 {
+			# SSE: never buffer, keep the connection open.
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				response_header_timeout 0
+			}
+		}
+	}
+
+	# SPA: hashed assets cache forever, index.html never.
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+}

@@ -3,6 +3,9 @@ Django==5.0.6
 djangorestframework==3.15.1
 django-cors-headers==4.3.1
 
+# === Production WSGI (docker-compose.prod.yml) ===
+gunicorn==23.0.0
+
 # === Async tasks ===
 celery==5.4.0
 redis==5.0.4

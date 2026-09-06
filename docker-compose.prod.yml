@@ -1,0 +1,70 @@
+# Production overlay — see docs/DEPLOY.md.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Differences from the dev compose:
+#   * app runs gunicorn (threaded, so SSE streams don't starve the worker)
+#   * app port is not published; Caddy (`web`) is the only entrypoint
+#   * `web` builds the SPA and serves it + proxies /api and /media
+#   * no bind-mount of the source tree — the image is the deployable unit
+services:
+  app:
+    # NB: keep every continuation line at the same indent — with `>` a deeper
+    # indent preserves the newline and sh would run "--bind …" as a new command.
+    command: >-
+      sh -c "python manage.py migrate --noinput &&
+      (python manage.py preflight || true) &&
+      exec gunicorn core.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-2}
+      --threads ${GUNICORN_THREADS:-8}
+      --worker-class gthread
+      --timeout 0
+      --access-logfile - --error-logfile -"
+    environment:
+      - PYTHONPATH=/app/src
+      - POSTGRES_HOST=db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DJANGO_DEBUG=0
+      - DJANGO_SECURE_PROXY_SSL_HEADER=1
+      # Taken from .env (compose interpolates it) or the shell; with the dev
+      # default the app refuses to boot — by design (see settings.py).
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-secret-change-me}
+    ports: !reset []
+    volumes:
+      - media:/app/media
+    restart: unless-stopped
+
+  worker:
+    volumes:
+      - media:/app/media
+    restart: unless-stopped
+
+  db:
+    ports: !reset []
+    restart: unless-stopped
+
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    image: podcast-pack-web:latest
+    environment:
+      # ":80" for plain HTTP, or your domain for automatic HTTPS.
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
