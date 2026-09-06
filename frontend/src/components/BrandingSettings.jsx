@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { storeBranding, CLIP_LAYOUTS, CAPTION_STYLES } from '../api/branding.js'
 
-const LOGO_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'])
+const LOGO_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const MAX_LOGO_BYTES = 2 * 1024 * 1024
 
 /**
@@ -33,7 +33,7 @@ export default function BrandingSettings({ value, onChange }) {
     e.target.value = ''
     if (!file) return
     if (!LOGO_MIMES.has(file.type)) {
-      setLogoError('Logo must be PNG, JPEG, WebP or SVG')
+      setLogoError('Logo must be PNG, JPEG or WebP')
       return
     }
     if (file.size > MAX_LOGO_BYTES) {
@@ -92,10 +92,10 @@ export default function BrandingSettings({ value, onChange }) {
 
           <div className="sm:col-span-2 flex items-center gap-3 text-sm">
             <label className="flex-1 flex flex-col gap-1">
-              <span className="text-gray-600">Logo (PNG/JPEG/WebP/SVG, ≤ 2 MB)</span>
+              <span className="text-gray-600">Logo (PNG/JPEG/WebP, ≤ 2 MB)</span>
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                accept="image/png,image/jpeg,image/webp"
                 onChange={onLogo}
                 aria-label="Logo file"
                 className="text-xs text-gray-500"

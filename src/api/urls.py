@@ -1,9 +1,10 @@
 from django.urls import path
 
-from api.views import health, jobs, upload
+from api.views import auth, health, jobs, upload
 
 urlpatterns = [
     path("health", health.health, name="health"),
+    path("auth/session", auth.session, name="auth_session"),
     path("jobs", jobs.list_jobs, name="jobs_list"),
     path("jobs/upload", upload.upload, name="jobs_upload"),
     path("jobs/from_url", upload.from_url, name="jobs_from_url"),

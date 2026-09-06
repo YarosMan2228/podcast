@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from django.conf import settings
 from rest_framework import status
-from rest_framework.decorators import api_view, parser_classes
+from rest_framework.decorators import api_view, parser_classes, throttle_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+
+from api.throttles import ApiAnonThrottle, UploadThrottle
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -45,6 +47,7 @@ def _gate_on_preflight() -> None:
 
 @api_view(["POST"])
 @parser_classes([MultiPartParser])
+@throttle_classes([ApiAnonThrottle, UploadThrottle])
 def upload(request: Request) -> Response:
     """Multipart: ``file`` (required) + optional Pro fields
     ``podcast_name``, ``brand_color`` (#RRGGBB), ``logo`` (image ≤ 2 MB),
@@ -76,6 +79,7 @@ def upload(request: Request) -> Response:
 
 @api_view(["POST"])
 @parser_classes([JSONParser, MultiPartParser, FormParser])
+@throttle_classes([ApiAnonThrottle, UploadThrottle])
 def from_url(request: Request) -> Response:
     """SPEC §2.3 — create a Job from a YouTube URL.
 

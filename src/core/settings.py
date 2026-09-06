@@ -29,13 +29,31 @@ def _env_int(name: str, default: int) -> int:
     return int(raw)
 
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-change-me")
+_DEV_SECRET = "dev-secret-change-me"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", _DEV_SECRET)
 DEBUG = _env_bool("DJANGO_DEBUG", default=True)
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if h.strip()
 ]
+
+# Refuse to boot a non-debug deployment with the dev secret — a leaked
+# default SECRET_KEY lets anyone forge signed cookies.
+if not DEBUG and SECRET_KEY == _DEV_SECRET:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set to a real value when DJANGO_DEBUG=0"
+    )
+
+# Optional shared secret gating /api/ and /media/ (api.middleware). Empty =
+# open, which is only acceptable on localhost.
+APP_ACCESS_TOKEN = os.environ.get("APP_ACCESS_TOKEN", "").strip()
+
+# Per-IP throttles (api.throttles). DRF rate syntax: "<n>/<sec|min|hour|day>".
+API_RATE_LIMIT = os.environ.get("API_RATE_LIMIT", "300/min")
+UPLOAD_RATE_LIMIT = os.environ.get("UPLOAD_RATE_LIMIT", "20/hour")
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -50,8 +68,18 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "api.middleware.AccessTokenMiddleware",
 ]
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
+SECURE_REFERRER_POLICY = "same-origin"
+# Behind a TLS-terminating proxy set DJANGO_SECURE_PROXY_SSL_HEADER=1 so
+# request.is_secure() is true and the access cookie gets the Secure flag.
+if _env_bool("DJANGO_SECURE_PROXY_SSL_HEADER", False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 ROOT_URLCONF = "core.urls"
 WSGI_APPLICATION = "core.wsgi.application"
@@ -148,12 +176,20 @@ EVENTS_ENABLED = _env_bool("EVENTS_ENABLED", default=True)
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
+    "DEFAULT_THROTTLE_CLASSES": ["api.throttles.ApiAnonThrottle"],
     "EXCEPTION_HANDLER": "api.exception_handler.structured_exception_handler",
     "UNAUTHENTICATED_USER": None,
 }
 
-# CORS — wide-open for MVP; restrict in production
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS: the Vite dev server proxies /api so same-origin is the normal case.
+# Wide-open only in DEBUG; in production list the SPA origins explicitly in
+# CORS_ALLOWED_ORIGINS (comma-separated) or leave empty for same-origin only.
+_cors_origins = [
+    o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+CORS_ALLOW_ALL_ORIGINS = DEBUG and not _cors_origins
+CORS_ALLOWED_ORIGINS = _cors_origins
+CORS_ALLOW_CREDENTIALS = True
 
 LOGGING = {
     "version": 1,

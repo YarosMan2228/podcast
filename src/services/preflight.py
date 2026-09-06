@@ -78,8 +78,8 @@ def _structural_issues() -> list[dict[str, str]]:
                 {
                     "key": key_name,
                     "reason": (
-                        f"{key_name} appears to be a placeholder "
-                        f"({value[:8]}…). Set a real key in .env."
+                        f"{key_name} appears to be a placeholder. "
+                        "Set a real key in .env."
                     ),
                 }
             )
@@ -90,7 +90,7 @@ def _structural_issues() -> list[dict[str, str]]:
                     "key": key_name,
                     "reason": (
                         f"{key_name} must start with 'sk-' (OpenAI) or "
-                        f"'gsk_' (Groq); got {value[:6]}…."
+                        "'gsk_' (Groq)."
                     ),
                 }
             )

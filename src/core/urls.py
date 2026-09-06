@@ -16,8 +16,17 @@ def serve_media(request: HttpRequest, path: str) -> HttpResponse:
 
     ``MEDIA_ROOT`` is read per request (not captured at import) so
     ``override_settings`` in tests and env changes at boot both apply.
+
+    Files under MEDIA_ROOT are user-supplied (uploads, logos). Django's
+    ``serve`` already refuses ``..`` traversal; on top of that we forbid
+    the browser from sniffing a type and from running anything the file
+    might contain (CSP ``sandbox``), so a crafted upload can't become a
+    same-origin XSS.
     """
-    return serve(request, path, document_root=settings.MEDIA_ROOT)
+    response = serve(request, path, document_root=settings.MEDIA_ROOT)
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Content-Security-Policy"] = "sandbox; default-src 'none'; media-src 'self'; img-src 'self'"
+    return response
 
 
 urlpatterns = [

@@ -81,6 +81,28 @@ export async function submitUrl(url, options = {}) {
 }
 
 /**
+ * Probe the optional access-token gate.
+ * @returns {Promise<{required: boolean, authenticated: boolean}>}
+ */
+export async function getSession() {
+  const res = await fetch('/api/auth/session')
+  return handleResponse(res)
+}
+
+/**
+ * Exchange the shared token for the HttpOnly session cookie.
+ * @param {string} token
+ */
+export async function loginWithToken(token) {
+  const res = await fetch('/api/auth/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  return handleResponse(res)
+}
+
+/**
  * List recent jobs (newest first) for the history page.
  * @param {number} limit
  * @returns {Promise<{jobs: object[]}>}

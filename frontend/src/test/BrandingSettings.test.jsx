@@ -44,7 +44,7 @@ describe('BrandingSettings', () => {
     render(<Harness initial={{ podcast_name: 'X', brand_color: '#123456', logo: null }} onChange={onChange} />)
     const bad = new File(['%PDF'], 'doc.pdf', { type: 'application/pdf' })
     await user.upload(screen.getByLabelText('Logo file'), bad)
-    expect(screen.getByRole('alert')).toHaveTextContent(/PNG, JPEG, WebP or SVG/)
+    expect(screen.getByRole('alert')).toHaveTextContent(/PNG, JPEG or WebP/)
     expect(onChange).not.toHaveBeenCalled()
   })
 

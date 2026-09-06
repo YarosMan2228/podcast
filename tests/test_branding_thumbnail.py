@@ -27,7 +27,18 @@ from workers.thumbnail_worker import generate_thumbnail
 
 pytestmark = pytest.mark.django_db
 
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+def _real_png() -> bytes:
+    """Logos are now decoded with Pillow, so the fixture must be a real PNG."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+PNG_BYTES = _real_png()
 
 
 @pytest.fixture
@@ -72,13 +83,14 @@ class TestParseBranding:
             parse_branding({"podcast_name": "x" * 121}, {})
 
     def test_logo_validation(self) -> None:
+        # Content decides: a PDF body is rejected, a PNG body with a PDF
+        # header/name is accepted (see test_security_hardening for more).
         with pytest.raises(BrandingInvalid):
-            parse_branding({}, {"logo": _logo(mime="application/pdf", name="x.pdf")})
+            parse_branding({}, {"logo": _logo(mime="application/pdf", name="x.pdf", data=b"%PDF-1.4\n")})
         with pytest.raises(BrandingInvalid):
             parse_branding({}, {"logo": _logo(data=b"")})
         with pytest.raises(BrandingInvalid):
             parse_branding({}, {"logo": _logo(data=b"\x00" * (2 * 1024 * 1024 + 1))})
-        # octet-stream with a .png name is accepted via extension sniff.
         b = parse_branding({}, {"logo": _logo(mime="application/octet-stream")})
         assert b.logo.content_type == "image/png"
 

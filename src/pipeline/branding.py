@@ -25,12 +25,47 @@ MAX_PODCAST_NAME_LEN = 120
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+# No SVG: it is served back from /media on the app origin and can carry
+# <script> — a stored XSS vector. Raster formats are verified with Pillow.
 _LOGO_MIMES: dict[str, str] = {
     "image/png": "png",
     "image/jpeg": "jpg",
     "image/webp": "webp",
-    "image/svg+xml": "svg",
 }
+_PIL_FORMAT_TO_MIME: dict[str, str] = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "WEBP": "image/webp",
+}
+MAX_LOGO_PIXELS = 4096 * 4096
+
+
+def _verify_logo_image(logo: UploadedFile) -> str:
+    """Return the *actual* MIME by decoding the bytes with Pillow.
+
+    The browser-declared content type and the extension are both
+    attacker-controlled; decoding is the only check that means anything.
+    Raises ``BrandingInvalid`` for non-images, disallowed formats, or
+    decompression-bomb sized dimensions.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    logo.seek(0)
+    try:
+        with Image.open(logo) as img:
+            fmt = (img.format or "").upper()
+            width, height = img.size
+            img.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise BrandingInvalid(field="logo", detail="not a readable image") from exc
+    finally:
+        logo.seek(0)
+    mime = _PIL_FORMAT_TO_MIME.get(fmt)
+    if mime is None:
+        raise BrandingInvalid(field="logo", detail="PNG, JPEG or WebP only")
+    if width * height > MAX_LOGO_PIXELS:
+        raise BrandingInvalid(field="logo", detail="image too large (max 4096x4096)")
+    return mime
 
 
 @dataclass(frozen=True)
@@ -64,12 +99,8 @@ def parse_branding(data: Mapping[str, Any], files: Mapping[str, Any]) -> Brandin
             raise BrandingInvalid(field="logo", detail="file is empty")
         if logo.size > MAX_LOGO_BYTES:
             raise BrandingInvalid(field="logo", detail="max 2 MB")
-        mime = (logo.content_type or "").lower()
-        if mime not in _LOGO_MIMES:
-            guessed, _ = mimetypes.guess_type(logo.name or "")
-            if guessed not in _LOGO_MIMES:
-                raise BrandingInvalid(field="logo", detail="PNG, JPEG, WebP or SVG only")
-            logo.content_type = guessed
+        # Content decides, not the header or the extension (checklist #14).
+        logo.content_type = _verify_logo_image(logo)
 
     return Branding(podcast_name=name or None, brand_color=color.lower(), logo=logo)
 
