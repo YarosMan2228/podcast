@@ -50,6 +50,9 @@ if not DEBUG and SECRET_KEY == _DEV_SECRET:
 # Optional shared secret gating /api/ and /media/ (api.middleware). Empty =
 # open, which is only acceptable on localhost.
 APP_ACCESS_TOKEN = os.environ.get("APP_ACCESS_TOKEN", "").strip()
+# Multi-user mode (services.access): per-user keys from the access_keys
+# table, jobs scoped to their owner; APP_ACCESS_TOKEN becomes the master key.
+APP_MULTI_USER = _env_bool("APP_MULTI_USER", False)
 
 # Per-IP throttles (api.throttles). DRF rate syntax: "<n>/<sec|min|hour|day>".
 API_RATE_LIMIT = os.environ.get("API_RATE_LIMIT", "300/min")

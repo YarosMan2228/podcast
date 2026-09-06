@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Iterable
 from django.conf import settings
 
 if TYPE_CHECKING:  # pragma: no cover
+    from jobs.models import AccessKey
     from pipeline.branding import Branding
     from pipeline.clip_options import ClipOptions
 from django.core.files.uploadedfile import UploadedFile
@@ -144,6 +145,7 @@ def save_upload(
     mime_type: str | None = None,
     branding: "Branding | None" = None,
     clip_options: "ClipOptions | None" = None,
+    owner: "AccessKey | None" = None,
 ) -> Job:
     """Persist *upload* to ``MEDIA_ROOT/uploads/<job_id>/`` and create a Job.
 
@@ -182,6 +184,7 @@ def save_upload(
     with transaction.atomic():
         job = Job.objects.create(
             id=job_id,
+            owner=owner,
             source_type=SourceType.FILE,
             original_filename=safe_name,
             raw_media_path=str(dest),

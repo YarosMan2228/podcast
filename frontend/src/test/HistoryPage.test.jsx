@@ -22,6 +22,9 @@ const JOBS = [
 function mockFetch(handlers) {
   globalThis.fetch = vi.fn(async (url, opts = {}) => {
     const method = opts.method ?? 'GET'
+    if (method === 'GET' && url === '/api/auth/session') {
+      return { ok: true, status: 200, json: async () => ({ required: false, authenticated: true, name: 'anonymous', is_admin: true }) }
+    }
     const handler = handlers[`${method} ${url}`]
     if (!handler) throw new Error(`unexpected ${method} ${url}`)
     const { status = 200, body } = handler()

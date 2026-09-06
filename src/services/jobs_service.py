@@ -22,14 +22,17 @@ DEFAULT_LIST_LIMIT = 50
 MAX_LIST_LIMIT = 200
 
 
-def create_url_job(url: str, branding: Any = None, clip_options: Any = None) -> Job:
-    """Persist a PENDING URL-sourced Job (+ Pro branding / clip options)."""
+def create_url_job(
+    url: str, branding: Any = None, clip_options: Any = None, *, owner: Any = None
+) -> Job:
+    """Persist a PENDING URL-sourced Job (+ Pro branding / clip options / owner)."""
     from pipeline.branding import store_logo
 
     with transaction.atomic():
         job = Job.objects.create(
             source_type=SourceType.URL,
             source_url=url,
+            owner=owner,
             podcast_name=getattr(branding, "podcast_name", None),
             brand_color=getattr(branding, "brand_color", None) or "#6366f1",
             clip_layout=getattr(clip_options, "layout", None) or "pad",
@@ -42,15 +45,17 @@ def create_url_job(url: str, branding: Any = None, clip_options: Any = None) -> 
     return job
 
 
-def list_recent_jobs(limit: int = DEFAULT_LIST_LIMIT) -> list[Job]:
-    """Newest-first jobs with analysis + artifacts preloaded for summaries."""
+def list_recent_jobs(limit: int = DEFAULT_LIST_LIMIT, *, principal: Any = None) -> list[Job]:
+    """Newest-first jobs with analysis + artifacts preloaded for summaries.
+
+    ``principal`` (services.access.Principal) scopes the list to the
+    caller's own jobs unless they are the admin / master token.
+    """
     limit = max(1, min(int(limit), MAX_LIST_LIMIT))
-    qs: QuerySet[Job] = (
-        Job.objects.select_related("analysis")
-        .prefetch_related("artifacts")
-        .order_by("-created_at")[:limit]
-    )
-    return list(qs)
+    qs: QuerySet[Job] = Job.objects.select_related("analysis").prefetch_related("artifacts")
+    if principal is not None and not principal.is_admin:
+        qs = qs.filter(owner=principal.key)
+    return list(qs.order_by("-created_at")[:limit])
 
 
 def summarize_job(job: Job) -> dict[str, Any]:

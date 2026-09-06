@@ -9,7 +9,7 @@
 
 ## 0b. Security-чеклист (2026-09-06)
 
-20 пунктов «must-do before launch» пройдены, статус каждого и ссылки на тесты — в `docs/SECURITY.md`. Ключевое: опциональный `APP_ACCESS_TOKEN` закрывает всё `/api` и `/media` (cookie HttpOnly), троттлинг 300/min + 20 uploads/hour на IP, логотипы проверяются Pillow (SVG запрещён), `/media` с `nosniff` + CSP `sandbox`, ключи не утекают в 503, уязвимые зависимости подняты (`npm audit` 0, `pip-audit` чист по прод-пакетам).
+20 пунктов «must-do before launch» пройдены, статус каждого и ссылки на тесты — в `docs/SECURITY.md`. Ключевое: опциональный `APP_ACCESS_TOKEN` закрывает всё `/api` и `/media` (cookie HttpOnly), троттлинг 300/min + 20 uploads/hour на IP, логотипы проверяются Pillow (SVG запрещён), `/media` с `nosniff` + CSP `sandbox`, ключи не утекают в 503, уязвимые зависимости подняты (`npm audit` 0, `pip-audit` чист по прод-пакетам). Multi-user: `APP_MULTI_USER=1` + `manage.py access_key create` — именные ключи, эпизоды принадлежат владельцу, чужие → 404 везде включая `/media` (миграция 0006, `services/access.py`, `tests/test_multi_user.py`).
 
 ## 0a. Pro-версия (2026-09-05) — четыре фичи, по коммиту на каждую
 

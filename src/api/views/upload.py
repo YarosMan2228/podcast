@@ -27,6 +27,7 @@ from pipeline.url_ingestion import (
     UrlValidationError,
     validate_url,
 )
+from services.access import owner_for_new_job
 from services.jobs_service import create_url_job
 from services.preflight import check_api_keys, issues_to_message
 from workers.tasks import start_job
@@ -67,7 +68,13 @@ def upload(request: Request) -> Response:
     branding = parse_branding(request.data, request.FILES)
     clip_options = parse_clip_options(request.data)
 
-    job = save_upload(uploaded, mime_type=mime, branding=branding, clip_options=clip_options)
+    job = save_upload(
+        uploaded,
+        mime_type=mime,
+        branding=branding,
+        clip_options=clip_options,
+        owner=owner_for_new_job(request),
+    )
     # .claude/rules/celery-tasks.md §7: only dispatch after the Job row is
     # committed. save_upload's transaction.atomic() has already exited here.
     start_job.apply_async(args=[str(job.id)])
@@ -100,7 +107,7 @@ def from_url(request: Request) -> Response:
     branding = parse_branding(data, request.FILES)
     clip_options = parse_clip_options(data)
 
-    job = create_url_job(url, branding, clip_options)
+    job = create_url_job(url, branding, clip_options, owner=owner_for_new_job(request))
     start_job.apply_async(args=[str(job.id)])
     return Response(
         {"job_id": str(job.id), "status": job.status},

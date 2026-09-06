@@ -102,6 +102,12 @@ export async function loginWithToken(token) {
   return handleResponse(res)
 }
 
+/** Clear the access cookie. */
+export async function logout() {
+  const res = await fetch('/api/auth/session', { method: 'DELETE' })
+  return handleResponse(res)
+}
+
 /**
  * List recent jobs (newest first) for the history page.
  * @param {number} limit

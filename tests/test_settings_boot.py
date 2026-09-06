@@ -27,8 +27,8 @@ def test_celery_app_importable() -> None:
 
 
 def test_jobs_app_models_registered() -> None:
-    """All four models are visible in Django's registry under the `jobs` label."""
+    """All models are visible in Django's registry under the `jobs` label."""
     from django.apps import apps
 
     registered = {m.__name__ for m in apps.get_app_config("jobs").get_models()}
-    assert registered == {"Job", "Transcript", "Analysis", "Artifact"}
+    assert registered == {"Job", "Transcript", "Analysis", "Artifact", "AccessKey"}

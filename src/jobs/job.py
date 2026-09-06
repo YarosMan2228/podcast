@@ -5,11 +5,20 @@ import uuid
 
 from django.db import models as djmodels
 
+from jobs.access_key import AccessKey
 from jobs.enums import JobStatus, SourceType
 
 
 class Job(djmodels.Model):
     id = djmodels.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Multi-user isolation: NULL = created by the master token / open mode.
+    owner = djmodels.ForeignKey(
+        AccessKey,
+        null=True,
+        blank=True,
+        on_delete=djmodels.SET_NULL,
+        related_name="jobs",
+    )
     status = djmodels.CharField(
         max_length=32,
         choices=JobStatus.choices,

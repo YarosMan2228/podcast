@@ -23,6 +23,12 @@ def serve_media(request: HttpRequest, path: str) -> HttpResponse:
     might contain (CSP ``sandbox``), so a crafted upload can't become a
     same-origin XSS.
     """
+    from django.http import Http404
+
+    from services.access import can_access_media_path
+
+    if not can_access_media_path(request, path):
+        raise Http404("not yours")
     response = serve(request, path, document_root=settings.MEDIA_ROOT)
     response["X-Content-Type-Options"] = "nosniff"
     response["Content-Security-Policy"] = "sandbox; default-src 'none'; media-src 'self'; img-src 'self'"

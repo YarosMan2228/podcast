@@ -51,7 +51,8 @@ class TestAccessTokenGate:
     def test_open_when_unset(self, client: APIClient) -> None:
         with override_settings(APP_ACCESS_TOKEN=""):
             assert client.get("/api/jobs").status_code == 200
-            assert client.get("/api/auth/session").json() == {"required": False, "authenticated": True}
+            probe = client.get("/api/auth/session").json()
+            assert (probe["required"], probe["authenticated"]) == (False, True)
 
     def test_api_and_media_require_token(self, client: APIClient, tmp_path: Path) -> None:
         (tmp_path / "x.txt").write_text("hi")
@@ -62,7 +63,8 @@ class TestAccessTokenGate:
             assert client.get("/media/x.txt").status_code == 401
             # Health + session probe stay reachable.
             assert client.get("/api/health").status_code == 200
-            assert client.get("/api/auth/session").json() == {"required": True, "authenticated": False}
+            probe = client.get("/api/auth/session").json()
+            assert (probe["required"], probe["authenticated"]) == (True, False)
 
     def test_header_cookie_and_query_are_accepted(self, client: APIClient, tmp_path: Path) -> None:
         (tmp_path / "x.txt").write_text("hi")
@@ -88,8 +90,8 @@ class TestAccessTokenGate:
             assert "pp_access" not in bad.cookies
 
             ok = client.post("/api/auth/session", {"token": TOKEN}, format="json")
-            assert ok.status_code == 200 and ok.json() == {"authenticated": True}
-            assert client.get("/api/auth/session").json() == {"required": True, "authenticated": True}
+            assert ok.status_code == 200 and ok.json()["authenticated"] is True
+            assert client.get("/api/auth/session").json()["authenticated"] is True
             assert client.get("/api/jobs").status_code == 200
 
             client.delete("/api/auth/session")

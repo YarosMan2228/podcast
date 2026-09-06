@@ -6,6 +6,7 @@ Django app registry and gives callers a single tidy import path:
 
     from jobs.models import Job, Transcript, Analysis, Artifact
 """
+from jobs.access_key import AccessKey
 from jobs.analysis import Analysis
 from jobs.artifact import Artifact
 from jobs.enums import (
@@ -20,6 +21,7 @@ from jobs.job import Job
 from jobs.transcript import Transcript
 
 __all__ = [
+    "AccessKey",
     "Job",
     "Transcript",
     "Analysis",

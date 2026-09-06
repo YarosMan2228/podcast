@@ -5,11 +5,11 @@
 | # | Пункт | Статус | Где / как |
 |---|---|---|---|
 | 1 | Hide API keys | ✅ | `.env` в `.gitignore` и `.dockerignore`; ключи только через `settings.*`; preflight больше не печатает даже префикс ключа в 503/логи (`services/preflight.py`). Тест: `test_preflight_503_does_not_echo_key_material`. |
-| 2 | Enable RLS | ➖ | Один арендатор, нет пользовательских таблиц — Postgres RLS нечего разделять. При появлении аккаунтов: `job.owner_id` + RLS по `current_setting('app.user_id')`. |
+| 2 | Enable RLS | ✅ (app-level) | `Job.owner` → `AccessKey`; каждый запрос фильтруется через `services/access.py` (`scope_jobs`, `can_access_job`, `can_access_media_path`). Не Postgres-RLS (тесты на SQLite, один DB-пользователь), но эквивалент на уровне приложения с тестами на каждую точку доступа. |
 | 3 | Test IDOR | ✅ | Все id — UUIDv4 (неперебираемые). При `APP_ACCESS_TOKEN` любой `/api/jobs/:id` без токена → 401 (`test_gate_protects_job_records`). |
 | 4 | Scan GIT secrets | ✅ | `git log -p --all` по паттернам `sk-…`, `sk-ant-…`, `gsk_…`, `AKIA…`, `ghp_…` — только тестовая заглушка `sk-ant-test-fixture-key-not-real`. `.env` никогда не был закоммичен. |
 | 5 | Lock admin routes | ➖ | `django.contrib.admin` не подключён, роутов нет. |
-| 6 | User isolation | ⚠️ | Аккаунтов нет; изоляция = один общий токен на инсталляцию (`api/middleware.py`). Multi-user — следующий этап. |
+| 6 | User isolation | ✅ | `APP_MULTI_USER=1` + `manage.py access_key create --name …`: у каждого пользователя свой ключ (в БД только SHA-256), эпизоды принадлежат владельцу, чужие → 404 в list/get/delete/download/SSE/regenerate/`/media`. `APP_ACCESS_TOKEN` = мастер-ключ (видит всё). Тесты: `tests/test_multi_user.py`. |
 | 7 | Rate limit APIs | ✅ | `api/throttles.py`: 300/min на любой `/api/` + 20/hour на создание эпизодов (`upload`, `from_url`), per-IP, через Redis-кэш. Regenerate: 3/мин на артефакт (SPEC §6.5). `Retry-After` в 429. |
 | 8 | Lock storage buckets | ✅ | Локальный `MEDIA_ROOT`; `/media/` за тем же токеном, отдаётся с `nosniff` + `CSP: sandbox`, path traversal отбивается (`test_media_path_traversal_is_blocked`). |
 | 9 | Validate all inputs | ✅ | UUID, MIME по содержимому + расширению, размер ≤500 MB, `brand_color` regex, `podcast_name` ≤120, `hint` ≤300, `clip_layout`/`caption_style` enum, `tone` enum, `limit` clamp, `part` enum. |
@@ -31,6 +31,8 @@
 
 ```
 APP_ACCESS_TOKEN=<длинная случайная строка>   # python -c "import secrets;print(secrets.token_urlsafe(32))"
+APP_MULTI_USER=1                               # опционально: несколько пользователей
+#   docker compose exec app python manage.py access_key create --name Alice
 DJANGO_DEBUG=0
 DJANGO_SECRET_KEY=<другая случайная строка>
 DJANGO_ALLOWED_HOSTS=your.domain
@@ -41,6 +43,7 @@ DJANGO_SECURE_PROXY_SSL_HEADER=1               # если TLS терминиру
 
 ## Что осознанно не сделано
 
-- Пользовательские аккаунты и per-user изоляция (пункты 2, 6) — общий токен на инсталляцию.
+- Самостоятельная регистрация / пароли / OAuth — ключи выдаёт оператор командой; для SaaS понадобится полноценный auth.
+- Postgres RLS как второй рубеж (сейчас изоляция на уровне приложения).
 - WAF / защита от DDoS на уровне сети — задача reverse-proxy, не приложения.
 - Антивирусный скан загружаемого аудио/видео — ffmpeg работает в контейнере без сети, файл никогда не исполняется.

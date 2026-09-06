@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { listJobs, deleteJob } from '../api/client.js'
+import { listJobs, deleteJob, getSession, logout } from '../api/client.js'
 import { showToast } from '../api/toast.js'
 
 const STATUS_STYLES = {
@@ -128,6 +128,23 @@ export default function HistoryPage() {
   const [jobs, setJobs] = useState(null)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  const [session, setSession] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getSession()
+      .then((s) => { if (!cancelled) setSession(s) })
+      .catch(() => { if (!cancelled) setSession(null) })
+    return () => { cancelled = true }
+  }, [])
+
+  async function handleLogout() {
+    try {
+      await logout()
+    } finally {
+      window.location.assign('/')
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -161,7 +178,19 @@ export default function HistoryPage() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-100 px-4 py-3">
         <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
-          <h1 className="text-lg font-bold text-gray-900">Your episodes</h1>
+          <div>
+            <h1 className="text-lg font-bold text-gray-900">Your episodes</h1>
+            {session?.required && session?.authenticated && (
+              <p className="text-xs text-gray-400">
+                Signed in as <span className="font-medium text-gray-600">{session.name}</span>
+                {session.is_admin && ' (admin)'}
+                {' · '}
+                <button onClick={handleLogout} className="underline hover:text-indigo-600" aria-label="Log out">
+                  log out
+                </button>
+              </p>
+            )}
+          </div>
           <Link
             to="/"
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700"

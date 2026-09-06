@@ -47,6 +47,7 @@ from api.errors import (
 )
 from jobs.models import Artifact, ArtifactStatus, ArtifactType, Job, JobStatus
 from pipeline.clip_options import clean_hint
+from services.access import can_access_job, principal_of
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,9 @@ def get_job(request: Request, job_id: str) -> Response:
         job = Job.objects.select_related("analysis").get(id=normalized)
     except Job.DoesNotExist as exc:
         raise JobNotFound(job_id=job_id) from exc
+    if not can_access_job(request, job):
+        # 404, not 403: don't confirm the id exists to a stranger.
+        raise JobNotFound(job_id=job_id)
 
     if request.method == "DELETE":
         from services.jobs_service import delete_job
@@ -221,7 +225,7 @@ def list_jobs(request: Request) -> Response:
         limit = int(raw_limit) if raw_limit else DEFAULT_LIST_LIMIT
     except ValueError:
         limit = DEFAULT_LIST_LIMIT
-    jobs = list_recent_jobs(limit)
+    jobs = list_recent_jobs(limit, principal=principal_of(request))
     return Response({"jobs": [summarize_job(j) for j in jobs]})
 
 
@@ -311,7 +315,8 @@ def job_events(request: Request, job_id: str) -> StreamingHttpResponse:
     normalized = _validate_job_id(job_id)
     # Confirm the job exists before opening the stream — a 404 here is
     # better than a subscription that silently yields keepalives forever.
-    if not Job.objects.filter(id=normalized).exists():
+    job = Job.objects.filter(id=normalized).first()
+    if job is None or not can_access_job(request, job):
         raise JobNotFound(job_id=job_id)
 
     client = redis.Redis.from_url(settings.REDIS_URL)
@@ -465,8 +470,10 @@ def regenerate_artifact(request: Request, artifact_id: str) -> Response:
         raise ArtifactNotFound(artifact_id=artifact_id)
 
     try:
-        artifact = Artifact.objects.get(id=normalized_id)
+        artifact = Artifact.objects.select_related("job").get(id=normalized_id)
     except Artifact.DoesNotExist:
+        raise ArtifactNotFound(artifact_id=artifact_id)
+    if not can_access_job(request, artifact.job):
         raise ArtifactNotFound(artifact_id=artifact_id)
 
     tone: str | None = None
@@ -578,6 +585,8 @@ def download_package(request: Request, job_id: str) -> StreamingHttpResponse:
         job = Job.objects.get(id=normalized)
     except Job.DoesNotExist as exc:
         raise JobNotFound(job_id=job_id) from exc
+    if not can_access_job(request, job):
+        raise JobNotFound(job_id=job_id)
 
     part = (request.query_params.get("part") or "").strip().lower()
     if part:
